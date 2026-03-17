@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF Editor</title>
+
+<!-- Google Fonts: Japanese fonts for canvas rendering -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Noto+Serif+JP:wght@400;700&display=swap" rel="stylesheet">
+
+<!-- Libraries via CDN (UMD) -->
+<script src="https://unpkg.com/preact@10.23.1/dist/preact.umd.js"></script>
+<script src="https://unpkg.com/preact@10.23.1/hooks/dist/hooks.umd.js"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+<script src="vendor/fabric.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script src="https://unpkg.com/@cantoo/pdf-lib@2.3.2/dist/pdf-lib.min.js"></script>
+
+<style>
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #e8e8e8;
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --border-color: #ddd;
+  --accent: #2196F3;
+  --accent-hover: #1976D2;
+  --danger: #f44336;
+  --success: #4caf50;
+  --warning: #ff9800;
+  --shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.dark {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #2d2d2d;
+  --bg-tertiary: #3d3d3d;
+  --text-primary: #e0e0e0;
+  --text-secondary: #999;
+  --border-color: #444;
+  --accent: #64b5f6;
+  --accent-hover: #42a5f5;
+  --shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg-secondary); color:var(--text-primary); overflow:hidden; height:100vh; }
+#app { height:100vh; }
+.app-container { display:flex; flex-direction:column; height:100vh; }
+.app-body { display:flex; flex:1; overflow:hidden; }
+
+/* Toolbar */
+.toolbar { display:flex; align-items:center; padding:4px 8px; background:var(--bg-primary); border-bottom:1px solid var(--border-color); gap:2px; flex-wrap:wrap; min-height:44px; box-shadow:var(--shadow); z-index:10; }
+.toolbar-group { display:flex; align-items:center; gap:2px; }
+.toolbar-sep { width:1px; height:28px; background:var(--border-color); margin:0 4px; }
+.toolbar-spacer { flex:1; }
+.tool-btn { padding:4px 8px; border:1px solid transparent; border-radius:4px; background:transparent; cursor:pointer; font-size:16px; line-height:1; color:var(--text-primary); transition:background .15s; min-width:32px; min-height:32px; display:flex; align-items:center; justify-content:center; }
+.tool-btn:hover { background:var(--bg-tertiary); }
+.tool-btn.active { background:var(--accent); color:white; border-color:var(--accent-hover); }
+.tool-btn:disabled { opacity:.35; cursor:not-allowed; }
+.tool-btn:disabled:hover { background:transparent; }
+.page-input,.zoom-input { width:50px; padding:3px 6px; border:1px solid var(--border-color); border-radius:4px; text-align:center; font-size:13px; background:var(--bg-primary); color:var(--text-primary); }
+.page-total,.zoom-unit { font-size:12px; color:var(--text-secondary); }
+
+/* Properties Bar */
+.props-bar { display:flex; align-items:center; padding:4px 12px; background:var(--bg-secondary); border-bottom:1px solid var(--border-color); gap:12px; font-size:13px; flex-wrap:wrap; }
+.props-bar label { display:flex; align-items:center; gap:4px; white-space:nowrap; }
+.props-bar input[type="color"] { width:28px; height:24px; padding:0; border:1px solid var(--border-color); border-radius:4px; cursor:pointer; }
+.props-bar input[type="range"] { width:80px; }
+.props-bar input[type="number"],.props-bar select { width:60px; padding:2px 4px; border:1px solid var(--border-color); border-radius:3px; font-size:13px; background:var(--bg-primary); color:var(--text-primary); }
+.prop-btn { padding:2px 8px; border:1px solid var(--border-color); border-radius:3px; background:var(--bg-primary); cursor:pointer; font-size:14px; font-weight:bold; min-width:28px; color:var(--text-primary); }
+.prop-btn.active { background:var(--accent); color:white; border-color:var(--accent); }
+
+/* Shape dropdown */
+.shape-dropdown { position:relative; display:inline-flex; }
+.shape-dropdown-btn { padding:2px 4px; border:1px solid transparent; border-radius:4px; background:transparent; cursor:pointer; font-size:10px; line-height:1; color:var(--text-secondary); min-width:16px; display:flex; align-items:center; }
+.shape-dropdown-btn:hover { background:var(--bg-tertiary); }
+.shape-dropdown-panel { position:absolute; top:100%; left:0; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.15); padding:6px; display:grid; grid-template-columns:repeat(4,1fr); gap:2px; z-index:100; min-width:160px; }
+.shape-dropdown-panel button { padding:6px; border:1px solid transparent; border-radius:4px; background:transparent; cursor:pointer; font-size:18px; display:flex; align-items:center; justify-content:center; color:var(--text-primary); }
+.shape-dropdown-panel button:hover { background:var(--bg-tertiary); }
+.shape-dropdown-panel button.active { background:var(--accent); color:white; }
+.shape-dropdown-panel .shape-label { font-size:10px; grid-column:1/-1; color:var(--text-secondary); padding:2px 4px; border-top:1px solid var(--border-color); margin-top:2px; }
+
+/* Sidebar */
+.sidebar { width:220px; min-width:220px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; overflow:hidden; }
+.sidebar-tabs { display:flex; border-bottom:1px solid var(--border-color); }
+.sidebar-tab { flex:1; padding:8px 4px; border:none; background:transparent; cursor:pointer; font-size:12px; color:var(--text-secondary); border-bottom:2px solid transparent; transition:all .15s; }
+.sidebar-tab:hover { background:var(--bg-secondary); }
+.sidebar-tab.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+.sidebar-content { flex:1; overflow-y:auto; padding:8px; }
+.thumb-list { display:flex; flex-direction:column; gap:8px; }
+.thumb-item { position:relative; border:2px solid transparent; border-radius:4px; padding:4px; cursor:pointer; background:var(--bg-secondary); transition:border-color .15s; }
+.thumb-item:hover { border-color:var(--border-color); }
+.thumb-item.active { border-color:var(--accent); background:rgba(33,150,243,.08); }
+.thumb-item img { width:100%; display:block; border-radius:2px; }
+.thumb-label { display:block; text-align:center; font-size:11px; color:var(--text-secondary); margin-top:4px; }
+.thumb-actions { position:absolute; top:4px; right:4px; display:none; gap:2px; }
+.thumb-item:hover .thumb-actions { display:flex; }
+.thumb-act-btn { width:20px; height:20px; border:none; border-radius:3px; background:rgba(0,0,0,.5); color:white; cursor:pointer; font-size:12px; display:flex; align-items:center; justify-content:center; }
+.thumb-act-btn.del { background:rgba(244,67,54,.8); }
+.outline-tree { list-style:none; }
+.outline-item { display:flex; justify-content:space-between; padding:6px 8px; cursor:pointer; border-radius:4px; color:var(--text-primary); text-decoration:none; font-size:13px; }
+.outline-item:hover { background:var(--bg-secondary); }
+.outline-page { font-size:11px; color:var(--text-secondary); margin-left:8px; }
+.search-form { display:flex; gap:4px; margin-bottom:12px; }
+.search-input { flex:1; padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; font-size:13px; background:var(--bg-primary); color:var(--text-primary); }
+.search-btn { padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-secondary); cursor:pointer; font-size:14px; }
+.search-result { display:flex; gap:8px; padding:6px 8px; border-radius:4px; cursor:pointer; font-size:13px; }
+.search-result:hover { background:var(--bg-secondary); }
+.search-pg { font-weight:600; color:var(--accent); flex-shrink:0; }
+.search-txt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.empty-msg { text-align:center; color:var(--text-secondary); font-size:13px; padding:20px; }
+
+/* Main View */
+.main-view { flex:1; overflow:auto; display:flex; justify-content:center; align-items:flex-start; padding:20px; background:var(--bg-tertiary); position:relative; }
+.main-view.empty { align-items:center; justify-content:center; }
+.main-view.drag-over { background:rgba(33,150,243,.1); outline:3px dashed var(--accent); outline-offset:-10px; }
+.drop-zone { text-align:center; color:var(--text-secondary); }
+.drop-icon { font-size:64px; margin-bottom:16px; }
+.drop-zone p { font-size:16px; margin:4px 0; }
+.canvas-wrap { position:relative; box-shadow:var(--shadow); background:white; }
+.pdf-canvas { display:block; }
+.annot-container { position:absolute; top:0; left:0; }
+
+/* Dialog */
+.dlg-overlay { position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,.5); display:flex; justify-content:center; align-items:center; z-index:1000; }
+.dlg { background:var(--bg-primary); border-radius:8px; padding:24px; min-width:400px; max-width:600px; max-height:80vh; overflow-y:auto; box-shadow:0 4px 16px rgba(0,0,0,.2); }
+.dlg h3 { margin-bottom:16px; font-size:18px; }
+.dlg-body { margin-bottom:20px; }
+.dlg-body label { display:block; margin-bottom:10px; font-size:14px; }
+.dlg-body input[type="text"],.dlg-body input[type="number"],.dlg-body input[type="password"],.dlg-body select { width:100%; padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; font-size:14px; background:var(--bg-primary); color:var(--text-primary); margin-top:4px; }
+.dlg-body small { color:var(--text-secondary); font-size:12px; }
+.dlg-actions { display:flex; justify-content:flex-end; gap:8px; }
+.dlg-actions button { padding:8px 20px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-secondary); color:var(--text-primary); cursor:pointer; font-size:14px; }
+.dlg-actions button.primary { background:var(--accent); color:white; border-color:var(--accent); }
+.dlg-actions button:hover { opacity:.9; }
+.dlg-actions button:disabled { opacity:.5; cursor:not-allowed; }
+.merge-item { display:flex; justify-content:space-between; align-items:center; padding:8px; border:1px solid var(--border-color); border-radius:4px; margin-bottom:4px; background:var(--bg-secondary); }
+.merge-item button { padding:2px 8px; margin-left:4px; border:1px solid var(--border-color); border-radius:3px; background:var(--bg-primary); cursor:pointer; font-size:12px; }
+.split-modes label { display:flex !important; align-items:center; gap:8px; margin-bottom:8px; }
+.shortcut-table { width:100%; border-collapse:collapse; }
+.shortcut-table th,.shortcut-table td { padding:6px 12px; text-align:left; border-bottom:1px solid var(--border-color); }
+.shortcut-table kbd { background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:3px; padding:2px 6px; font-family:monospace; font-size:13px; }
+.error-text { color:var(--danger); font-size:13px; margin-top:4px; }
+
+/* Toast */
+.toast-wrap { position:fixed; bottom:20px; right:20px; z-index:2000; display:flex; flex-direction:column; gap:8px; }
+.toast { padding:10px 20px; border-radius:6px; color:white; font-size:14px; box-shadow:0 2px 8px rgba(0,0,0,.2); animation:toastIn .3s ease; }
+.toast-info { background:var(--accent); }
+.toast-success { background:var(--success); }
+.toast-error { background:var(--danger); }
+@keyframes toastIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+input[type="number"] { -moz-appearance:textfield; }
+@media(max-width:768px) { .sidebar{width:160px!important;min-width:160px!important;} .toolbar{flex-wrap:wrap;} }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toISOString(), 'color: lime; font-weight: bold; font-size: 14px;');
+(function() {
+  var pdfjsLib = window['pdfjs-dist/build/pdf'];
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  window.pdfjsLib = pdfjsLib;
+  window.__pdfjsReady = true;
+  console.log('[PDF Editor] PDF.js 3.11.174 initialized with classic worker');
+})();
+</script>
+
+<script>
+// ============================================================
+// PDF Editor - Native Single-File Application
+// ============================================================
+(function() {
+  'use strict';
+
+  const { h, render: preactRender, Component } = preact;
+  const { useState, useEffect, useRef, useCallback } = preactHooks;
+  const html = htm.bind(h);
+
+  // --- Constants ---
+  const TOOLS = {
+    SELECT:'select', PAN:'pan', RECT:'rect', CIRCLE:'circle', ELLIPSE:'ellipse',
+    TRIANGLE:'triangle', DIAMOND:'diamond',
+    LINE:'line', ARROW:'arrow', DOUBLE_ARROW:'double-arrow', CURVED_ARROW:'curved-arrow',
+    POLYGON:'polygon', STAR:'star', CLOUD:'cloud', CLOUD_CALLOUT:'cloud-callout',
+    CALLOUT:'callout', CROSS:'cross', HEART:'heart', BRACE:'brace',
+    PENCIL:'pencil', TEXT:'text', IMAGE:'image',
+    HIGHLIGHT:'highlight', UNDERLINE:'underline', STRIKETHROUGH:'strikethrough',
+    STAMP:'stamp', NOTE:'note', TEXT_EDIT:'text-edit', SHAPE_EDIT:'shape-edit'
+  };
+  const STAMP_LABELS = { approved:'承認済', confidential:'機密', draft:'ドラフト', final:'最終版', reviewed:'レビュー済' };
+  const DEFAULT_PROPS = { strokeColor:'#ff0000', textColor:'#000000', fillColor:'transparent', strokeWidth:2, opacity:1, fontSize:16, fontFamily:'Noto Sans JP', fontWeight:'normal', fontStyle:'normal', underline:false, linethrough:false, stampType:'approved', polygonSides:6, starPoints:5, arrowType:'arrow' };
+  const ZOOM_MIN=0.25, ZOOM_MAX=5, ZOOM_STEP=0.1;
+  const SHORTCUTS = { v:'select',r:'rect',c:'circle',l:'line',a:'arrow',p:'pencil',t:'text',h:'highlight',n:'note',s:'stamp',d:'text-edit',e:'shape-edit' };
+  const SHORTCUT_LIST = [['V','選択'],['R','矩形'],['C','円'],['L','線'],['A','矢印'],['P','ペン'],['T','テキスト'],['D','テキスト編集'],['E','図形編集'],['H','ハイライト'],['N','付箋'],['S','スタンプ'],['Ctrl+Z','元に戻す'],['Ctrl+Y','やり直し'],['Ctrl+S','保存'],['Delete','削除'],['+/-','ズーム'],['?','ヘルプ']];
+
+  // --- Shape generators ---
+  function makeRegularPolygon(cx,cy,r,sides){
+    const pts=[];for(let i=0;i<sides;i++){const a=-Math.PI/2+2*Math.PI*i/sides;pts.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)});}return pts;
+  }
+  function makeStarPoints(cx,cy,outerR,innerR,points){
+    const pts=[];for(let i=0;i<points*2;i++){const a=-Math.PI/2+Math.PI*i/points;const r=i%2===0?outerR:innerR;pts.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)});}return pts;
+  }
+  function makeCloudPath(x,y,w,h){
+    const bumps=Math.max(4,Math.round((w+h)/40));
+    const pts=[];const cx=x+w/2,cy=y+h/2;const rx=w/2,ry=h/2;
+    for(let i=0;i<bumps;i++){const a=2*Math.PI*i/bumps;pts.push({x:cx+rx*Math.cos(a),y:cy+ry*Math.sin(a)});}
+    let d='';const br=Math.min(w,h)*0.12;
+    for(let i=0;i<pts.length;i++){const p=pts[i],n=pts[(i+1)%pts.length];const mx=(p.x+n.x)/2,my=(p.y+n.y)/2;
+      const dx=n.x-p.x,dy=n.y-p.y;const len=Math.sqrt(dx*dx+dy*dy);const nx=-dy/len,ny=dx/len;
+      const cpx=mx+nx*br,cpy=my+ny*br;
+      if(i===0)d+=`M ${p.x} ${p.y} `;d+=`Q ${cpx} ${cpy} ${n.x} ${n.y} `;}
+    d+='Z';return d;
+  }
+  function makeHeartPath(x,y,w,h){
+    const cx=x+w/2;const topY=y+h*0.3;
+    return`M ${cx} ${y+h} C ${x} ${y+h*0.6} ${x} ${topY-h*0.1} ${x+w*0.25} ${topY-h*0.1} C ${x+w*0.4} ${topY-h*0.1} ${cx} ${y+h*0.15} ${cx} ${y} C ${cx} ${y+h*0.15} ${x+w*0.6} ${topY-h*0.1} ${x+w*0.75} ${topY-h*0.1} C ${x+w} ${topY-h*0.1} ${x+w} ${y+h*0.6} ${cx} ${y+h} Z`;
+  }
+  function makeCalloutPath(x,y,w,h){
+    const r=Math.min(w,h)*0.08;const tailW=w*0.12;const tailH=h*0.2;const tailX=x+w*0.25;
+    return`M ${x+r} ${y} L ${x+w-r} ${y} Q ${x+w} ${y} ${x+w} ${y+r} L ${x+w} ${y+h-tailH-r} Q ${x+w} ${y+h-tailH} ${x+w-r} ${y+h-tailH} L ${tailX+tailW} ${y+h-tailH} L ${tailX} ${y+h} L ${tailX+tailW/2} ${y+h-tailH} L ${x+r} ${y+h-tailH} Q ${x} ${y+h-tailH} ${x} ${y+h-tailH-r} L ${x} ${y+r} Q ${x} ${y} ${x+r} ${y} Z`;
+  }
+  function makeCrossPoints(x,y,w,h){
+    const a=w/3,b=h/3;
+    return[{x:x+a,y:y},{x:x+2*a,y:y},{x:x+2*a,y:y+b},{x:x+w,y:y+b},{x:x+w,y:y+2*b},{x:x+2*a,y:y+2*b},{x:x+2*a,y:y+h},{x:x+a,y:y+h},{x:x+a,y:y+2*b},{x:x,y:y+2*b},{x:x,y:y+b},{x:x+a,y:y+b}];
+  }
+  function makeBracePath(x,y,w,h){
+    const cw=w*0.2;
+    return`M ${x+cw} ${y} Q ${x} ${y} ${x} ${y+h*0.25} L ${x} ${y+h*0.4} Q ${x} ${y+h/2} ${x-cw*0.5} ${y+h/2} Q ${x} ${y+h/2} ${x} ${y+h*0.6} L ${x} ${y+h*0.75} Q ${x} ${y+h} ${x+cw} ${y+h}`;
+  }
+  function makeCurvedArrowPath(sx,sy,ex,ey){
+    const dx=ex-sx,dy=ey-sy;const mx=(sx+ex)/2,my=(sy+ey)/2;
+    const len=Math.sqrt(dx*dx+dy*dy);const nx=-dy/len,ny=dx/len;
+    const bulge=len*0.3;const cpx=mx+nx*bulge,cpy=my+ny*bulge;
+    return{path:`M ${sx} ${sy} Q ${cpx} ${cpy} ${ex} ${ey}`,cpx,cpy};
+  }
+
+  // --- Utilities ---
+  function readFileAsArrayBuffer(file) {
+    return new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(new Error('読み込み失敗')); r.readAsArrayBuffer(file); });
+  }
+  function readFileAsDataURL(file) {
+    return new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(new Error('読み込み失敗')); r.readAsDataURL(file); });
+  }
+  function downloadUint8(data, name) {
+    const b=new Blob([data],{type:'application/pdf'}), u=URL.createObjectURL(b), a=document.createElement('a');
+    a.href=u; a.download=name; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(u);
+  }
+  function isPDF(f){ return f.type==='application/pdf'||f.name.toLowerCase().endsWith('.pdf'); }
+  function isImage(f){ return f.type.startsWith('image/'); }
+  function hexToRgb(hex){
+    if(!hex||hex==='transparent')return[0,0,0];
+    hex=hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+    return [parseInt(hex.slice(0,2),16)/255,parseInt(hex.slice(2,4),16)/255,parseInt(hex.slice(4,6),16)/255];
+  }
+  // --- Font Manager ---
+  const FONT_DEFS = {
+    'Helvetica':      {type:'standard',standard:'Helvetica',label:'Helvetica'},
+    'Helvetica-Bold':  {type:'standard',standard:'Helvetica-Bold',label:'Helvetica Bold'},
+    'Times-Roman':     {type:'standard',standard:'TimesRoman',label:'Times Roman'},
+    'Times-Bold':      {type:'standard',standard:'TimesRomanBold',label:'Times Bold'},
+    'Courier':         {type:'standard',standard:'Courier',label:'Courier'},
+    'Courier-Bold':    {type:'standard',standard:'CourierBold',label:'Courier Bold'},
+    'Noto Sans JP':    {type:'custom',url:'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf',label:'Noto Sans JP',css:'Noto Sans JP'},
+    'Noto Serif JP':   {type:'custom',url:'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notoserifjp/NotoSerifJP%5Bwght%5D.ttf',label:'Noto Serif JP',css:'Noto Serif JP'}
+  };
+  const fontBytesCache=new Map();
+  const embeddedFontCache=new Map();
+  async function fetchFontBytes(fontKey){
+    if(fontBytesCache.has(fontKey))return fontBytesCache.get(fontKey);
+    const def=FONT_DEFS[fontKey];
+    if(!def||def.type!=='custom')return null;
+    console.log('[PDF Editor] フォント取得中: '+fontKey+'...');
+    const res=await fetch(def.url);
+    if(!res.ok)throw new Error('Font fetch failed: '+res.status);
+    const buf=await res.arrayBuffer();
+    fontBytesCache.set(fontKey,buf);
+    console.log('[PDF Editor] フォント取得完了: '+fontKey+' ('+Math.round(buf.byteLength/1024)+'KB)');
+    return buf;
+  }
+  function hasNonLatin(text){return/[^\x00-\x7F]/.test(text);}
+  // フォント選択肢（UI用）
+  const FONT_OPTIONS=[
+    {value:'Noto Sans JP',label:'Noto Sans JP (日本語)'},
+    {value:'Noto Serif JP',label:'Noto Serif JP (日本語)'},
+    {value:'Helvetica',label:'Helvetica'},
+    {value:'Times-Roman',label:'Times Roman'},
+    {value:'Courier',label:'Courier'},
+  ];
+  const FONT_CSS_MAP={'Helvetica':'Helvetica,Arial,sans-serif','Helvetica-Bold':'Helvetica,Arial,sans-serif','Times-Roman':'Times New Roman,serif','Times-Bold':'Times New Roman,serif','Courier':'Courier New,monospace','Courier-Bold':'Courier New,monospace','Noto Sans JP':'"Noto Sans JP",sans-serif','Noto Serif JP':'"Noto Serif JP",serif'};
+
+  // --- History Manager ---
+  function createHistoryManager() {
+    let undo=[], redo=[], onChange=null;
+    return {
+      push(e){ undo.push(e); if(undo.length>50)undo.shift(); redo=[]; onChange?.({canUndo:undo.length>0,canRedo:false}); },
+      undo(){ if(!undo.length)return null; const e=undo.pop(); redo.push(e); onChange?.({canUndo:undo.length>0,canRedo:redo.length>0}); return e; },
+      redo(){ if(!redo.length)return null; const e=redo.pop(); undo.push(e); onChange?.({canUndo:undo.length>0,canRedo:redo.length>0}); return e; },
+      canUndo(){ return undo.length>0; }, canRedo(){ return redo.length>0; },
+      clear(){ undo=[]; redo=[]; onChange?.({canUndo:false,canRedo:false}); },
+      setOnChange(cb){ onChange=cb; }
+    };
+  }
+
+  // --- Render Layer (PDF.js) ---
+  function createRenderLayer() {
+    let pdfDoc=null, currentTask=null;
+    return {
+      async loadDocument(data,password){
+        pdfDoc = await window.pdfjsLib.getDocument({data:new Uint8Array(data.slice(0)),password:password||undefined}).promise;
+        return pdfDoc;
+      },
+      async renderPage(num,scale,canvas){
+        if(!pdfDoc)return;
+        if(currentTask){try{currentTask.cancel();}catch(e){}} currentTask=null;
+        const page=await pdfDoc.getPage(num), vp=page.getViewport({scale});
+        canvas.width=vp.width; canvas.height=vp.height;
+        const task=page.render({canvasContext:canvas.getContext('2d'),viewport:vp});
+        currentTask=task;
+        try{await task.promise;}catch(e){if(e.name!=='RenderingCancelledException')throw e;}
+        currentTask=null;
+      },
+      async getPageDims(num){
+        if(!pdfDoc)return{width:0,height:0};
+        const page=await pdfDoc.getPage(num), vp=page.getViewport({scale:1});
+        return{width:vp.width,height:vp.height};
+      },
+      async genThumb(num,maxW){
+        if(!pdfDoc)return'';
+        const page=await pdfDoc.getPage(num), vp=page.getViewport({scale:1}), s=maxW/vp.width;
+        const tv=page.getViewport({scale:s}), c=document.createElement('canvas');
+        c.width=tv.width; c.height=tv.height;
+        await page.render({canvasContext:c.getContext('2d'),viewport:tv}).promise;
+        return c.toDataURL();
+      },
+      async getTextItems(num,scale){
+        if(!pdfDoc)return[];
+        const page=await pdfDoc.getPage(num),vp=page.getViewport({scale});
+        const tc=await page.getTextContent();
+        const raw=tc.items.filter(it=>it.str.trim()).map(it=>{
+          const tx=it.transform;
+          const fontSize=Math.sqrt(tx[0]*tx[0]+tx[1]*tx[1]);
+          const x=tx[4]*scale;
+          const y=vp.height-(tx[5]*scale)-(fontSize*scale);
+          return{text:it.str,x,y,width:it.width*scale,height:(it.height||fontSize)*scale,fontSize:fontSize*scale,
+            _pdfOriginal:{transform:tx,width:it.width,height:it.height||fontSize,str:it.str}};
+        });
+        // 近接テキストアイテムをマージ
+        if(raw.length<=1)return raw;
+        const sorted=[...raw].sort((a,b)=>{const dy=a.y-b.y;if(Math.abs(dy)>a.fontSize*0.5)return dy;return a.x-b.x;});
+        const merged=[{...sorted[0]}];
+        for(let i=1;i<sorted.length;i++){
+          const prev=merged[merged.length-1],cur=sorted[i];
+          const gap=cur.x-(prev.x+prev.width);
+          if(Math.abs(cur.y-prev.y)<prev.fontSize*0.5&&gap<prev.fontSize*0.5&&gap>-prev.fontSize*0.2){
+            prev.text+=(gap>prev.fontSize*0.1?' ':'')+cur.text;
+            prev.width=(cur.x+cur.width)-prev.x;
+            if(!prev._pdfOriginal._merged)prev._pdfOriginal._merged=[];
+            prev._pdfOriginal._merged.push(cur._pdfOriginal);
+          }else{merged.push({...cur});}
+        }
+        return merged;
+      },
+      async searchText(q){
+        if(!pdfDoc||!q)return[];
+        const res=[];
+        for(let i=1;i<=pdfDoc.numPages;i++){
+          const page=await pdfDoc.getPage(i), tc=await page.getTextContent();
+          for(const it of tc.items){
+            if(it.str.toLowerCase().includes(q.toLowerCase()))
+              res.push({page:i,text:it.str,position:{x:it.transform[4],y:it.transform[5]}});
+          }
+        }
+        return res;
+      },
+      async getOutline(){
+        if(!pdfDoc)return[];
+        const ol=await pdfDoc.getOutline();
+        if(!ol)return[];
+        async function proc(items){
+          const r=[];
+          for(const it of items){
+            let pg=1;
+            if(it.dest){try{const d=typeof it.dest==='string'?await pdfDoc.getDestination(it.dest):it.dest; if(d){const idx=await pdfDoc.getPageIndex(d[0]);pg=idx+1;}}catch(e){}}
+            r.push({title:it.title,page:pg,children:it.items?await proc(it.items):[]});
+          }
+          return r;
+        }
+        return proc(ol);
+      },
+      getDoc(){ return pdfDoc; },
+      // PDF.jsのgetOperatorList()を使ってコンテンツストリーム図形を抽出
+      async getContentStreamShapes(pageNum){
+        if(!pdfDoc)return[];
+        const page=await pdfDoc.getPage(pageNum);
+        const vp=page.getViewport({scale:1});
+        const results=[];
+        // Recording Canvas Context: PDF.jsのrender()にProxyキャンバスを渡し、
+        // 描画コールを傍受して図形を検出する。CTMを自前で追跡し画面座標に変換。
+        const offscreen=document.createElement('canvas');
+        offscreen.width=Math.ceil(vp.width);
+        offscreen.height=Math.ceil(vp.height);
+        const realCtx=offscreen.getContext('2d');
+        let curPath=[];
+        let ctm={a:1,b:0,c:0,d:1,e:0,f:0};
+        const ctmStack=[];
+        let lastFillPath=null; // fill→strokeマージ用
+        function mulMat(m1,m2){return{a:m1.a*m2.a+m1.c*m2.b,b:m1.b*m2.a+m1.d*m2.b,c:m1.a*m2.c+m1.c*m2.d,d:m1.b*m2.c+m1.d*m2.d,e:m1.a*m2.e+m1.c*m2.f+m1.e,f:m1.b*m2.e+m1.d*m2.f+m1.f};}
+        function toHex(css){
+          if(!css||css==='none')return null;
+          if(typeof css==='string'&&css.startsWith('#'))return css;
+          const m=String(css).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+          if(m)return'#'+[m[1],m[2],m[3]].map(v=>parseInt(v).toString(16).padStart(2,'0')).join('');
+          return String(css);
+        }
+        function xform(x,y){return{x:ctm.a*x+ctm.c*y+ctm.e,y:ctm.b*x+ctm.d*y+ctm.f};}
+        function calcBB(){
+          if(!curPath.length)return null;
+          let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+          function addPt(x,y){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}
+          for(const p of curPath){
+            if(p.op==='RE'){addPt(p.x,p.y);addPt(p.x+p.w,p.y+p.h);}
+            else{
+              if(p.x!==undefined)addPt(p.x,p.y);
+              if(p.x1!==undefined)addPt(p.x1,p.y1);
+              if(p.x2!==undefined)addPt(p.x2,p.y2);
+            }
+          }
+          const bw=maxX-minX,bh=maxY-minY;
+          return(bw>=2||bh>=2)?{minX,minY,maxX,maxY,bw,bh}:null;
+        }
+        const whiteCoverZones=[]; // 白矩形による遮蔽領域を記録
+        function buildResult(doStroke,doFill,bb,sc,fc,scaledLW,alpha){
+          // 白塗り矩形（背景消去）→遮蔽領域として記録、結果には含めない
+          if(doFill&&!doStroke&&(fc==='#ffffff'||fc==='#fff')){
+            whiteCoverZones.push({x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh});
+            return;
+          }
+          // fill→strokeマージ: 直前のfillと同じパスでstrokeが来たら統合
+          if(doStroke&&!doFill&&lastFillPath&&results.length){
+            const last=results[results.length-1];
+            if(Math.abs(last._bbMinX-bb.minX)<1&&Math.abs(last._bbMinY-bb.minY)<1){
+              last.strokeColor=sc;
+              last.lineWidth=scaledLW;
+              lastFillPath=null;
+              return;
+            }
+          }
+          const pathCopy=[...curPath];
+          const r={strokeColor:doStroke?sc:null,fillColor:doFill?fc:'transparent',lineWidth:scaledLW,opacity:alpha,_bbMinX:bb.minX,_bbMinY:bb.minY};
+          // RE（矩形）判定
+          if(pathCopy.length===1&&pathCopy[0].op==='RE'){
+            const re=pathCopy[0];
+            Object.assign(r,{shape:'rect',x:re.x,y:re.y,w:Math.abs(re.w),h:Math.abs(re.h)});
+            results.push(r);lastFillPath=doFill?pathCopy:null;return;
+          }
+          const noZ=pathCopy.filter(p=>p.op!=='Z');
+          const cleaned=[];
+          for(let j=0;j<noZ.length;j++){
+            if(noZ[j].op==='M'&&j+1<noZ.length&&noZ[j+1].op==='M')continue;
+            cleaned.push(noZ[j]);
+          }
+          if(cleaned.length===2&&cleaned[0].op==='M'&&cleaned[1].op==='L'){
+            Object.assign(r,{shape:'line',x1:cleaned[0].x,y1:cleaned[0].y,x2:cleaned[1].x,y2:cleaned[1].y,
+              strokeColor:doStroke?sc:'#000000'});
+            results.push(r);lastFillPath=null;return;
+          }
+          if(cleaned.length>=4&&cleaned.length<=5&&cleaned[0].op==='M'&&cleaned.slice(1).every(p=>p.op==='L')){
+            Object.assign(r,{shape:'rect',x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh});
+            results.push(r);lastFillPath=doFill?pathCopy:null;return;
+          }
+          Object.assign(r,{shape:'path',path:pathCopy,bbox:{x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh}});
+          results.push(r);lastFillPath=doFill?pathCopy:null;
+        }
+        const handler={
+          get(target,prop){
+            switch(prop){
+              case'moveTo':return(x,y)=>{const s=xform(x,y);curPath.push({op:'M',x:s.x,y:s.y});return realCtx.moveTo(x,y);};
+              case'lineTo':return(x,y)=>{const s=xform(x,y);curPath.push({op:'L',x:s.x,y:s.y});return realCtx.lineTo(x,y);};
+              case'bezierCurveTo':return(x1,y1,x2,y2,x,y)=>{const s1=xform(x1,y1),s2=xform(x2,y2),s=xform(x,y);curPath.push({op:'C',x1:s1.x,y1:s1.y,x2:s2.x,y2:s2.y,x:s.x,y:s.y});return realCtx.bezierCurveTo(x1,y1,x2,y2,x,y);};
+              case'quadraticCurveTo':return(cpx,cpy,x,y)=>{const sc=xform(cpx,cpy),s=xform(x,y);curPath.push({op:'Q',x1:sc.x,y1:sc.y,x:s.x,y:s.y});return realCtx.quadraticCurveTo(cpx,cpy,x,y);};
+              case'rect':return(x,y,w,h)=>{const p1=xform(x,y),p2=xform(x+w,y+h);const rx=Math.min(p1.x,p2.x),ry=Math.min(p1.y,p2.y);curPath.push({op:'RE',x:rx,y:ry,w:Math.abs(p2.x-p1.x),h:Math.abs(p2.y-p1.y)});return realCtx.rect(x,y,w,h);};
+              case'closePath':return()=>{curPath.push({op:'Z'});return realCtx.closePath();};
+              case'beginPath':return()=>{curPath=[];lastFillPath=null;return realCtx.beginPath();};
+              case'save':return()=>{ctmStack.push({...ctm});return realCtx.save();};
+              case'restore':return()=>{if(ctmStack.length)ctm=ctmStack.pop();return realCtx.restore();};
+              case'transform':return(a,b,c,d,e,f)=>{ctm=mulMat(ctm,{a,b,c,d,e,f});return realCtx.transform(a,b,c,d,e,f);};
+              case'setTransform':return(a,b,c,d,e,f)=>{if(typeof a==='object'){ctm={a:a.a,b:a.b,c:a.c,d:a.d,e:a.e,f:a.f};}else{ctm={a,b,c,d,e,f};}return typeof a==='object'?realCtx.setTransform(a):realCtx.setTransform(a,b,c,d,e,f);};
+              case'resetTransform':return()=>{ctm={a:1,b:0,c:0,d:1,e:0,f:0};return realCtx.resetTransform();};
+              case'stroke':return()=>{
+                const scaledLW=realCtx.lineWidth*Math.sqrt(Math.abs(ctm.a*ctm.d-ctm.b*ctm.c));
+                const bb=calcBB();
+                if(bb)buildResult(true,false,bb,toHex(realCtx.strokeStyle),toHex(realCtx.fillStyle),scaledLW,realCtx.globalAlpha);
+                curPath=[];
+                return realCtx.stroke();
+              };
+              case'fill':return(rule)=>{
+                const scaledLW=realCtx.lineWidth*Math.sqrt(Math.abs(ctm.a*ctm.d-ctm.b*ctm.c));
+                const bb=calcBB();
+                if(bb)buildResult(false,true,bb,toHex(realCtx.strokeStyle),toHex(realCtx.fillStyle),scaledLW,realCtx.globalAlpha);
+                // fill後もcurPathを保持（fill→strokeマージのため）
+                return rule!==undefined?realCtx.fill(rule):realCtx.fill();
+              };
+              case'clip':return(rule)=>{curPath=[];return rule!==undefined?realCtx.clip(rule):realCtx.clip();};
+            }
+            const val=target[prop];
+            if(typeof val==='function')return val.bind(target);
+            return val;
+          },
+          set(target,prop,value){target[prop]=value;return true;}
+        };
+        const proxyCtx=new Proxy(realCtx,handler);
+        try{
+          const renderTask=page.render({canvasContext:proxyCtx,viewport:vp});
+          await renderTask.promise;
+        }catch(e){console.warn('[PDF Editor] CS図形検出render error:',e);}
+        // 白矩形で遮蔽された図形をフィルタリング（保存時の白矩形カバー内の図形を除去）
+        const margin=2;
+        const filtered=results.filter(r=>{
+          let rx,ry,rw,rh;
+          if(r.shape==='rect'){rx=r.x;ry=r.y;rw=r.w;rh=r.h;}
+          else if(r.shape==='line'){rx=Math.min(r.x1,r.x2);ry=Math.min(r.y1,r.y2);rw=Math.abs(r.x2-r.x1);rh=Math.abs(r.y2-r.y1);}
+          else if(r.shape==='path'&&r.bbox){rx=r.bbox.x;ry=r.bbox.y;rw=r.bbox.w;rh=r.bbox.h;}
+          else return true;
+          for(const wz of whiteCoverZones){
+            if(rx>=wz.x-margin&&ry>=wz.y-margin&&rx+rw<=wz.x+wz.w+margin&&ry+rh<=wz.y+wz.h+margin)return false;
+          }
+          return true;
+        });
+        // 内部プロパティ削除
+        for(const r of filtered){delete r._bbMinX;delete r._bbMinY;}
+        offscreen.remove();
+        console.log('[PDF Editor] CS図形検出(Recording): '+filtered.length+'件 (raw:'+results.length+', 遮蔽除去:'+(results.length-filtered.length)+') (page '+pageNum+')');
+        return filtered;
+      },
+      destroy(){ if(pdfDoc){pdfDoc.destroy();pdfDoc=null;} }
+    };
+  }
+
+  // --- Annotation Layer (Fabric.js) ---
+  function createAnnotationLayer() {
+    let canvas=null, tool=TOOLS.SELECT, props={...DEFAULT_PROPS}, onMod=null, onSel=null;
+    let drawing=false, drawStart=null, tempShape=null;
+    const pageData=new Map();
+    let curPage=0;
+
+    function isShapeTool(t){ return[TOOLS.RECT,TOOLS.CIRCLE,TOOLS.ELLIPSE,TOOLS.TRIANGLE,TOOLS.DIAMOND,TOOLS.LINE,TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW,TOOLS.POLYGON,TOOLS.STAR,TOOLS.CLOUD,TOOLS.CLOUD_CALLOUT,TOOLS.CALLOUT,TOOLS.CROSS,TOOLS.HEART,TOOLS.BRACE].includes(t); }
+    function isMarkupTool(t){ return[TOOLS.HIGHLIGHT,TOOLS.UNDERLINE,TOOLS.STRIKETHROUGH].includes(t); }
+
+    function onMouseDown(opt){
+      if(!canvas)return;
+      const ptr=canvas.getPointer(opt.e);
+      // TEXT_EDITモード：クリック箇所のテキストのみをFabricオブジェクト化
+      if(tool===TOOLS.TEXT_EDIT&&!opt.target){
+        const self=canvas.__alRef; // ALへの参照（init時にセット）
+        if(self&&self.editTextAt(ptr.x,ptr.y))return;
+      }
+      if(tool===TOOLS.TEXT&&!opt.target){
+        const cssFont=FONT_CSS_MAP[props.fontFamily]||props.fontFamily||'sans-serif';
+        const t=new fabric.Textbox('テキスト',{left:ptr.x,top:ptr.y,fontSize:props.fontSize||16,fontFamily:cssFont,fontWeight:props.fontWeight||'normal',fontStyle:props.fontStyle||'normal',fill:props.textColor||'#000',underline:!!props.underline,linethrough:!!props.linethrough,width:200,editable:true});
+        t._pdfFontKey=props.fontFamily;
+        canvas.add(t); canvas.setActiveObject(t); t.enterEditing(); return;
+      }
+      if(tool===TOOLS.STAMP&&!opt.target){ addStamp(props.stampType||'approved',ptr.x,ptr.y); return; }
+      if(tool===TOOLS.NOTE&&!opt.target){ addNote('',ptr.x,ptr.y); return; }
+      if((isShapeTool(tool)||isMarkupTool(tool))&&!opt.target){ drawing=true; drawStart=ptr; canvas.selection=false; }
+    }
+    function onMouseMove(opt){
+      if(!drawing||!drawStart)return;
+      const ptr=canvas.getPointer(opt.e);
+      if(tempShape)canvas.remove(tempShape);
+      const x=Math.min(drawStart.x,ptr.x),y=Math.min(drawStart.y,ptr.y),w=Math.abs(ptr.x-drawStart.x),h=Math.abs(ptr.y-drawStart.y);
+      const sw=props.strokeWidth||2;
+      const so={stroke:props.strokeColor||'#f00',strokeWidth:sw,fill:props.fillColor||'transparent',opacity:props.opacity??1,selectable:false,evented:false};
+      const headSize=Math.max(10,sw*4);
+      switch(tool){
+        case TOOLS.RECT: tempShape=new fabric.Rect({left:x,top:y,width:w,height:h,...so}); break;
+        case TOOLS.CIRCLE: {const r=Math.min(w,h)/2;tempShape=new fabric.Circle({left:drawStart.x-(w>h?r:r*(w/Math.max(h,1))),top:drawStart.y-(h>w?r:r*(h/Math.max(w,1))),radius:r,...so});break;}
+        case TOOLS.ELLIPSE: tempShape=new fabric.Ellipse({left:x,top:y,rx:w/2,ry:h/2,...so}); break;
+        case TOOLS.TRIANGLE: {const pts=[{x:x+w/2,y},{x:x+w,y:y+h},{x,y:y+h}];tempShape=new fabric.Polygon(pts,so);break;}
+        case TOOLS.DIAMOND: {const pts=[{x:x+w/2,y},{x:x+w,y:y+h/2},{x:x+w/2,y:y+h},{x,y:y+h/2}];tempShape=new fabric.Polygon(pts,so);break;}
+        case TOOLS.LINE: tempShape=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so); break;
+        case TOOLS.ARROW: {
+          const ang=Math.atan2(ptr.y-drawStart.y,ptr.x-drawStart.x);
+          const ln=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so);
+          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          tempShape=new fabric.Group([ln,hd],{selectable:false,evented:false}); break;
+        }
+        case TOOLS.DOUBLE_ARROW: {
+          const ang=Math.atan2(ptr.y-drawStart.y,ptr.x-drawStart.x);
+          const ln=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so);
+          const hd1=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          const hd2=new fabric.Triangle({left:drawStart.x,top:drawStart.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)-90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          tempShape=new fabric.Group([ln,hd1,hd2],{selectable:false,evented:false}); break;
+        }
+        case TOOLS.CURVED_ARROW: {
+          const cv=makeCurvedArrowPath(drawStart.x,drawStart.y,ptr.x,ptr.y);
+          const p=new fabric.Path(cv.path,{...so,fill:'transparent'});
+          const ang=Math.atan2(ptr.y-cv.cpy,ptr.x-cv.cpx);
+          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          tempShape=new fabric.Group([p,hd],{selectable:false,evented:false}); break;
+        }
+        case TOOLS.POLYGON: {
+          const sides=props.polygonSides||6;const r=Math.min(w,h)/2;
+          const pts=makeRegularPolygon(x+w/2,y+h/2,r,sides);
+          tempShape=new fabric.Polygon(pts,so); break;
+        }
+        case TOOLS.STAR: {
+          const nPts=props.starPoints||5;const outerR=Math.min(w,h)/2;const innerR=outerR*0.4;
+          const pts=makeStarPoints(x+w/2,y+h/2,outerR,innerR,nPts);
+          tempShape=new fabric.Polygon(pts,so); break;
+        }
+        case TOOLS.CLOUD: {
+          const d=makeCloudPath(x,y,w,h);
+          tempShape=new fabric.Path(d,{...so,fill:so.fill}); break;
+        }
+        case TOOLS.CLOUD_CALLOUT: {
+          const bodyH=h*0.75;const d=makeCloudPath(x,y,w,bodyH);
+          const cloud=new fabric.Path(d,{...so,fill:so.fill});
+          const tailPts=[{x:x+w*0.35,y:y+bodyH*0.85},{x:x+w*0.25,y:y+h},{x:x+w*0.45,y:y+bodyH*0.9}];
+          const tail=new fabric.Polygon(tailPts,{...so,fill:so.fill});
+          tempShape=new fabric.Group([cloud,tail],{selectable:false,evented:false}); break;
+        }
+        case TOOLS.CALLOUT: {
+          const d=makeCalloutPath(x,y,w,h);
+          tempShape=new fabric.Path(d,so); break;
+        }
+        case TOOLS.CROSS: {
+          const pts=makeCrossPoints(x,y,w,h);
+          tempShape=new fabric.Polygon(pts,so); break;
+        }
+        case TOOLS.HEART: {
+          const d=makeHeartPath(x,y,w,h);
+          tempShape=new fabric.Path(d,so); break;
+        }
+        case TOOLS.BRACE: {
+          const d=makeBracePath(x,y,w,h);
+          tempShape=new fabric.Path(d,{...so,fill:'transparent'}); break;
+        }
+        case TOOLS.HIGHLIGHT: tempShape=new fabric.Rect({left:x,top:y,width:w,height:h,fill:props.strokeColor||'#ff0',opacity:.3,stroke:'transparent',strokeWidth:0,selectable:false,evented:false}); break;
+        case TOOLS.UNDERLINE: case TOOLS.STRIKETHROUGH:
+          tempShape=new fabric.Line([drawStart.x,drawStart.y,ptr.x,drawStart.y],{...so,strokeWidth:2}); break;
+      }
+      if(tempShape)canvas.add(tempShape);
+    }
+    function onMouseUp(){
+      if(!drawing||!tempShape){drawing=false;drawStart=null;return;}
+      tempShape.set({selectable:true,evented:true});
+      canvas.setActiveObject(tempShape); canvas.renderAll();
+      tempShape=null; drawing=false; drawStart=null;
+    }
+    function addStamp(type,x,y){
+      const label=STAMP_LABELS[type]||type;
+      const rect=new fabric.Rect({width:140,height:50,rx:8,ry:8,fill:'transparent',stroke:'#c00',strokeWidth:3});
+      const txt=new fabric.Text(label,{fontSize:20,fill:'#c00',fontWeight:'bold',fontFamily:'sans-serif',originX:'center',originY:'center',left:70,top:25});
+      const g=new fabric.Group([rect,txt],{left:x-70,top:y-25});
+      g.customType='stamp'; g.stampType=type;
+      canvas.add(g); canvas.setActiveObject(g); canvas.renderAll();
+    }
+    function addNote(comment,x,y){
+      const bg=new fabric.Rect({width:30,height:30,fill:'#ffe066',stroke:'#e6b800',strokeWidth:1,rx:4,ry:4});
+      const icon=new fabric.Text('\u{1F4DD}',{fontSize:18,left:5,top:3});
+      const g=new fabric.Group([bg,icon],{left:x,top:y});
+      g.customType='note'; g.noteComment=comment||'';
+      canvas.add(g); canvas.setActiveObject(g); canvas.renderAll();
+    }
+
+    return {
+      init(el,w,h){
+        const ce=document.createElement('canvas'); ce.id='annot-canvas'; el.appendChild(ce);
+        canvas=new fabric.Canvas(ce,{width:w,height:h,selection:true,preserveObjectStacking:true});
+        canvas.__alRef=this; // TEXT_EDIT用にALへの参照を保持
+        canvas.on('object:modified',(e)=>{if(e.target&&(e.target.customType==='shapeAnnot'||e.target.customType==='csShape'))e.target._isModified=true;onMod?.();}); canvas.on('object:added',()=>onMod?.()); canvas.on('object:removed',()=>onMod?.());
+        canvas.on('selection:created',e=>onSel?.(e)); canvas.on('selection:updated',e=>onSel?.(e));
+        canvas.on('mouse:down',onMouseDown); canvas.on('mouse:move',onMouseMove); canvas.on('mouse:up',onMouseUp);
+      },
+      setTool(t){
+        tool=t; if(!canvas)return;
+        canvas.isDrawingMode=(t===TOOLS.PENCIL);
+        if(canvas.isDrawingMode){canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
+        if(t===TOOLS.TEXT){canvas.defaultCursor='text';canvas.selection=false;}
+        else if(t===TOOLS.TEXT_EDIT){canvas.defaultCursor='text';canvas.selection=true;}
+        else if(t===TOOLS.SHAPE_EDIT){canvas.defaultCursor='default';canvas.selection=true;}
+        else if(isShapeTool(t)||isMarkupTool(t)){canvas.defaultCursor='crosshair';canvas.selection=false;}
+        else if(t===TOOLS.STAMP||t===TOOLS.NOTE||t===TOOLS.IMAGE){canvas.defaultCursor='pointer';canvas.selection=false;}
+        else{canvas.defaultCursor='default';canvas.selection=true;}
+      },
+      setProps(p){
+        props={...props,...p};
+        if(canvas&&canvas.isDrawingMode){canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
+        const act=canvas?.getActiveObject();
+        if(act){
+          const isText=['textbox','i-text','itext','Textbox','IText'].includes(act.type);
+          if(!isText){
+            if(p.strokeColor!==undefined)act.set('stroke',p.strokeColor);
+            if(p.fillColor!==undefined)act.set('fill',p.fillColor);
+            if(p.strokeWidth!==undefined)act.set('strokeWidth',p.strokeWidth);
+          }
+          if(p.opacity!==undefined)act.set('opacity',p.opacity);
+          if(isText){
+            if(p.fontSize!==undefined)act.set('fontSize',p.fontSize);
+            if(p.fontFamily!==undefined){act.set('fontFamily',FONT_CSS_MAP[p.fontFamily]||p.fontFamily);act._pdfFontKey=p.fontFamily;}
+            if(p.fontWeight!==undefined)act.set('fontWeight',p.fontWeight);
+            if(p.fontStyle!==undefined)act.set('fontStyle',p.fontStyle);
+            if(p.underline!==undefined)act.set('underline',p.underline);
+            if(p.linethrough!==undefined)act.set('linethrough',p.linethrough);
+            if(p.textColor!==undefined){act.set('fill',p.textColor);act.set('stroke',null);}
+          }
+          canvas.renderAll();
+        }
+      },
+      _pageZoom:new Map(),
+      savePage(){ if(!canvas||!curPage)return null; const j=canvas.toObject(['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough']); pageData.set(curPage,j); this._pageZoom.set(curPage,this._lastZoom); return j; },
+      loadPage(num){ if(!canvas)return; if(curPage)this.savePage(); curPage=num; canvas.clear(); const d=pageData.get(num); if(d){const CUSTOM_KEYS=['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough'];const savedZoom=this._pageZoom.get(num)||1;const curZoom=this._lastZoom||1;const r=curZoom/savedZoom;canvas.loadFromJSON(d).then(()=>{canvas.getObjects().forEach((obj,i)=>{const src=d.objects&&d.objects[i];if(src){CUSTOM_KEYS.forEach(k=>{if(src[k]!==undefined)obj[k]=src[k];});}if(r!==1){obj.set({left:obj.left*r,top:obj.top*r,scaleX:(obj.scaleX||1)*r,scaleY:(obj.scaleY||1)*r});obj.setCoords();}});this._pageZoom.set(num,curZoom);canvas.renderAll();});} },
+      getAllAnnotations(){ this.savePage(); return new Map(pageData); },
+      // --- テキスト編集（クリック方式）---
+      // テキストデータはメモリに保持、クリック時のみFabricオブジェクト化
+      _textEditItems:[], // {x,y,width,height,fontSize,text,_pdfOriginal,type:'embedded'|'acrobat',_annotIndex,...}
+      _textEditActive:null, // 現在編集中のFabricオブジェクト
+      setTextEditData(items,freeTexts){
+        this._textEditItems=[...items,...freeTexts];
+        console.log('[PDF Editor] テキスト編集データ: '+this._textEditItems.length+'件');
+      },
+      clearTextEditData(){this._textEditItems=[];},
+      // クリック座標からテキストアイテムを検索
+      findTextAt(px,py){
+        let best=null,bestDist=Infinity;
+        for(const it of this._textEditItems){
+          // バウンディングボックス判定
+          if(px>=it.x-5&&px<=it.x+it.width+5&&py>=it.y-5&&py<=it.y+it.height+5){
+            const dx=px-(it.x+it.width/2),dy=py-(it.y+it.height/2);
+            const dist=dx*dx+dy*dy;
+            if(dist<bestDist){bestDist=dist;best=it;}
+          }
+        }
+        return best;
+      },
+      // クリックされたテキストをFabricオブジェクト化して編集開始
+      editTextAt(px,py){
+        if(!canvas)return false;
+        const item=this.findTextAt(px,py);
+        if(!item)return false;
+        // 前回の未編集オブジェクトを除去
+        if(this._textEditActive&&(this._textEditActive.text||'')===(this._textEditActive._originalText||'')){
+          canvas.remove(this._textEditActive);
+        }
+        // 既にFabricオブジェクトとして存在するか確認（編集済みの場合）
+        const existing=canvas.getObjects().find(o=>
+          (o.customType==='pdfText'||o.customType==='freeTextAnnot')&&
+          (o.text||'')!==(o._originalText||'')&&
+          Math.abs(o.left-item.x)<3&&Math.abs(o.top-item.y)<3);
+        if(existing){canvas.setActiveObject(existing);existing.enterEditing?.();canvas.renderAll();return true;}
+        const isAccrobat=item.type==='acrobat';
+        const t=new fabric.Textbox(item.text,{
+          left:item.x,top:item.y,fontSize:item.fontSize,
+          fontFamily:FONT_CSS_MAP['Noto Sans JP'],
+          fill:item.fillColor||'#000000',width:Math.max(item.width,50),editable:true,
+          backgroundColor:'rgba(255,255,255,1)',
+          borderColor:isAccrobat?'#4488ff':'#ffa500',cornerColor:isAccrobat?'#4488ff':'#ffa500',
+          padding:2
+        });
+        // Fabric.js 6ではコンストラクタのカスタムプロパティが保持されないため明示代入
+        t.customType=isAccrobat?'freeTextAnnot':'pdfText';
+        t._textEditType=item.type;
+        t._pdfOriginal=item._pdfOriginal||null;
+        t._annotIndex=item._annotIndex!=null?item._annotIndex:undefined;
+        t._isModified=false;
+        t._originalText=item.text;
+        t._pdfFontKey='Noto Sans JP';
+        canvas.add(t);canvas.setActiveObject(t);t.enterEditing?.();
+        this._textEditActive=t;
+        canvas.renderAll();
+        return true;
+      },
+      // 図形注釈をFabricオブジェクトとしてCanvasに追加
+      addShapeAnnotations(shapes,dims,zoom){
+        if(!canvas||!shapes||!shapes.length)return 0;
+        let count=0;
+        for(const s of shapes){
+          try{
+            const r=s.rect;
+            const x=r.x1*zoom, y=(dims.height-r.y2)*zoom;
+            const w=(r.x2-r.x1)*zoom, h=(r.y2-r.y1)*zoom;
+            const strokeColor=s.color||'#000000';
+            const fillColor=s.interiorColor||'transparent';
+            const bw=s.borderWidth*zoom;
+            let obj=null;
+            switch(s.subtype){
+              case'Circle':{
+                const rx=w/2,ry=h/2;
+                obj=new fabric.Ellipse({left:x,top:y,rx:rx,ry:ry,stroke:strokeColor,strokeWidth:bw,fill:fillColor,opacity:s.opacity});
+                break;}
+              case'Square':{
+                obj=new fabric.Rect({left:x,top:y,width:w,height:h,stroke:strokeColor,strokeWidth:bw,fill:fillColor,opacity:s.opacity});
+                break;}
+              case'Line':{
+                if(s.vertices&&s.vertices.length>=4){
+                  const lx1=s.vertices[0]*zoom,ly1=(dims.height-s.vertices[1])*zoom;
+                  const lx2=s.vertices[2]*zoom,ly2=(dims.height-s.vertices[3])*zoom;
+                  obj=new fabric.Line([lx1,ly1,lx2,ly2],{stroke:strokeColor,strokeWidth:bw,opacity:s.opacity});
+                }else{
+                  obj=new fabric.Line([x,y,x+w,y+h],{stroke:strokeColor,strokeWidth:bw,opacity:s.opacity});
+                }
+                break;}
+              case'Ink':{
+                if(s.inkList&&s.inkList.length>0){
+                  let pathStr='';
+                  for(const pts of s.inkList){
+                    for(let j=0;j<pts.length;j+=2){
+                      const px=pts[j]*zoom,py=(dims.height-pts[j+1])*zoom;
+                      pathStr+=(j===0?'M ':'L ')+px+' '+py+' ';
+                    }
+                  }
+                  obj=new fabric.Path(pathStr,{stroke:strokeColor,strokeWidth:bw,fill:'transparent',opacity:s.opacity});
+                }
+                break;}
+              case'Polygon':{
+                if(s.vertices&&s.vertices.length>=4){
+                  const pts=[];for(let j=0;j<s.vertices.length;j+=2)pts.push({x:s.vertices[j]*zoom,y:(dims.height-s.vertices[j+1])*zoom});
+                  obj=new fabric.Polygon(pts,{stroke:strokeColor,strokeWidth:bw,fill:fillColor,opacity:s.opacity});
+                }
+                break;}
+              case'PolyLine':{
+                if(s.vertices&&s.vertices.length>=4){
+                  const pts=[];for(let j=0;j<s.vertices.length;j+=2)pts.push({x:s.vertices[j]*zoom,y:(dims.height-s.vertices[j+1])*zoom});
+                  obj=new fabric.Polyline(pts,{stroke:strokeColor,strokeWidth:bw,fill:'transparent',opacity:s.opacity});
+                }
+                break;}
+              case'Highlight':{
+                if(s.quadPoints&&s.quadPoints.length>=8){
+                  // QuadPointsから矩形群を作成
+                  for(let q=0;q<s.quadPoints.length;q+=8){
+                    const qx=Math.min(s.quadPoints[q],s.quadPoints[q+2],s.quadPoints[q+4],s.quadPoints[q+6])*zoom;
+                    const qy2=Math.max(s.quadPoints[q+1],s.quadPoints[q+3],s.quadPoints[q+5],s.quadPoints[q+7]);
+                    const qy1=Math.min(s.quadPoints[q+1],s.quadPoints[q+3],s.quadPoints[q+5],s.quadPoints[q+7]);
+                    const qw=(Math.max(s.quadPoints[q],s.quadPoints[q+2],s.quadPoints[q+4],s.quadPoints[q+6])-Math.min(s.quadPoints[q],s.quadPoints[q+2],s.quadPoints[q+4],s.quadPoints[q+6]))*zoom;
+                    const qh=(qy2-qy1)*zoom;
+                    const qTop=(dims.height-qy2)*zoom;
+                    const hr=new fabric.Rect({left:qx,top:qTop,width:qw,height:qh,fill:strokeColor,opacity:s.opacity*0.3,stroke:'transparent',strokeWidth:0});
+                    hr.customType='shapeAnnot';hr._annotIndex=s.annotIndex;hr._annotSubtype=s.subtype;hr._isModified=false;
+                    canvas.add(hr);count++;
+                  }
+                  continue;
+                }else{
+                  obj=new fabric.Rect({left:x,top:y,width:w,height:h,fill:strokeColor,opacity:s.opacity*0.3,stroke:'transparent',strokeWidth:0});
+                }
+                break;}
+              case'Underline':case'StrikeOut':{
+                if(s.quadPoints&&s.quadPoints.length>=8){
+                  for(let q=0;q<s.quadPoints.length;q+=8){
+                    const qx=Math.min(s.quadPoints[q],s.quadPoints[q+2],s.quadPoints[q+4],s.quadPoints[q+6])*zoom;
+                    const qy2=Math.max(s.quadPoints[q+1],s.quadPoints[q+3],s.quadPoints[q+5],s.quadPoints[q+7]);
+                    const qy1=Math.min(s.quadPoints[q+1],s.quadPoints[q+3],s.quadPoints[q+5],s.quadPoints[q+7]);
+                    const qw=(Math.max(s.quadPoints[q],s.quadPoints[q+2],s.quadPoints[q+4],s.quadPoints[q+6])-Math.min(s.quadPoints[q],s.quadPoints[q+2],s.quadPoints[q+4],s.quadPoints[q+6]))*zoom;
+                    const lineH=Math.max(2,2*zoom);
+                    const lineTop=s.subtype==='Underline'?(dims.height-qy1)*zoom-lineH:(dims.height-(qy1+qy2)/2)*zoom;
+                    const lr=new fabric.Rect({left:qx,top:lineTop,width:qw,height:lineH,fill:strokeColor,opacity:s.opacity,stroke:'transparent',strokeWidth:0});
+                    lr.customType='shapeAnnot';lr._annotIndex=s.annotIndex;lr._annotSubtype=s.subtype;lr._isModified=false;
+                    canvas.add(lr);count++;
+                  }
+                  continue;
+                }else{
+                  const lineH=Math.max(2,2*zoom);
+                  const lineTop=s.subtype==='Underline'?y+h-lineH:y+h/2;
+                  obj=new fabric.Rect({left:x,top:lineTop,width:w,height:lineH,fill:strokeColor,opacity:s.opacity,stroke:'transparent',strokeWidth:0});
+                }
+                break;}
+            }
+            if(obj){
+              obj.customType='shapeAnnot';obj._annotIndex=s.annotIndex;obj._annotSubtype=s.subtype;obj._isModified=false;
+              canvas.add(obj);count++;
+            }
+          }catch(e){console.warn('[PDF Editor] 図形注釈Fabric化失敗:',s.subtype,e);}
+        }
+        if(count)canvas.renderAll();
+        console.log('[PDF Editor] 図形注釈追加: '+count+'件');
+        return count;
+      },
+      // コンテンツストリーム図形をFabricオブジェクトとしてキャンバスに追加
+      // 座標はRL.getContentStreamShapes()から画面座標(scale=1)で受け取る
+      addContentStreamShapes(shapes,dims,zoom){
+        if(!canvas||!shapes||!shapes.length)return 0;
+        let count=0;
+        for(const s of shapes){
+          try{
+            let obj=null;
+            const bw=s.lineWidth*zoom;
+            const strokeC=s.strokeColor||'transparent';
+            const fillC=s.fillColor||'transparent';
+            if(s.shape==='rect'){
+              obj=new fabric.Rect({left:s.x*zoom,top:s.y*zoom,width:s.w*zoom,height:s.h*zoom,stroke:strokeC,strokeWidth:bw,fill:fillC,opacity:s.opacity});
+            } else if(s.shape==='line'){
+              obj=new fabric.Line([s.x1*zoom,s.y1*zoom,s.x2*zoom,s.y2*zoom],{stroke:strokeC,strokeWidth:bw,opacity:s.opacity});
+            } else if(s.shape==='path'){
+              let d='';
+              for(const p of s.path){
+                const tx=p.x!==undefined?p.x*zoom:0;
+                const ty=p.y!==undefined?p.y*zoom:0;
+                switch(p.op){
+                  case'M':d+=`M ${tx} ${ty} `;break;
+                  case'L':d+=`L ${tx} ${ty} `;break;
+                  case'C':{
+                    const cx1=p.x1*zoom,cy1=p.y1*zoom;
+                    const cx2=p.x2*zoom,cy2=p.y2*zoom;
+                    d+=`C ${cx1} ${cy1} ${cx2} ${cy2} ${tx} ${ty} `;break;
+                  }
+                  case'Q':{
+                    const qx1=p.x1*zoom,qy1=p.y1*zoom;
+                    d+=`Q ${qx1} ${qy1} ${tx} ${ty} `;break;
+                  }
+                  case'Z':d+='Z ';break;
+                }
+              }
+              if(d.trim()){
+                obj=new fabric.Path(d.trim(),{stroke:strokeC,strokeWidth:bw,fill:fillC,opacity:s.opacity});
+              }
+            }
+            if(obj){
+              obj.customType='csShape';
+              obj._csOriginal=s;
+              obj._isModified=false;
+              // 背景のPDF描画を覆い隠す白矩形を追加（元の図形位置）
+              const bb=obj.getBoundingRect?.(true)||{left:obj.left,top:obj.top,width:obj.width||0,height:obj.height||0};
+              const margin=(bw||2)+2;
+              const cover=new fabric.Rect({left:bb.left-margin,top:bb.top-margin,width:bb.width+margin*2,height:bb.height+margin*2,fill:'white',stroke:null,strokeWidth:0,selectable:false,evented:false,excludeFromExport:true,customType:'csCover'});
+              canvas.add(cover);
+              canvas.add(obj);count++;
+            }
+          }catch(e){console.warn('[PDF Editor] CS図形Fabric化失敗:',s.shape,e);}
+        }
+        if(count)canvas.renderAll();
+        console.log('[PDF Editor] コンテンツストリーム図形追加: '+count+'件');
+        return count;
+      },
+      clearUnmodifiedPdfText(){
+        if(!canvas)return;
+        const toRemove=canvas.getObjects().filter(o=>{
+          if(o.customType==='shapeAnnot')return!o._isModified;
+          if(o.customType!=='pdfText'&&o.customType!=='freeTextAnnot')return false;
+          return(o.text||'')===(o._originalText||'');
+        });
+        toRemove.forEach(o=>canvas.remove(o));
+        this._textEditActive=null;
+        if(toRemove.length)canvas.renderAll();
+      },
+      clearCsShapes(){
+        if(!canvas)return;
+        const toRemove=canvas.getObjects().filter(o=>o.customType==='csShape'||o.customType==='csCover');
+        toRemove.forEach(o=>canvas.remove(o));
+        if(toRemove.length)canvas.renderAll();
+      },
+      hasModifiedCsShapes(){
+        if(!canvas)return false;
+        return canvas.getObjects().some(o=>o.customType==='csShape'&&o._isModified);
+      },
+      getCsShapeObjects(){
+        if(!canvas)return[];
+        return canvas.getObjects().filter(o=>o.customType==='csShape');
+      },
+      async addImage(dataUrl){ const img=await fabric.Image.fromURL(dataUrl);const mx=400;if(img.width>mx||img.height>mx){const s=mx/Math.max(img.width,img.height);img.scaleToWidth(img.width*s);}canvas.add(img);canvas.setActiveObject(img);canvas.renderAll(); },
+      deleteSelected(){ if(!canvas)return; const a=canvas.getActiveObjects(); a.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.renderAll(); },
+      _lastZoom:1,
+      resize(w,h,newZoom){ if(!canvas)return; canvas.setDimensions({width:w,height:h}); if(newZoom&&this._lastZoom&&newZoom!==this._lastZoom){const r=newZoom/this._lastZoom;canvas.getObjects().forEach(o=>{o.set({left:o.left*r,top:o.top*r,scaleX:(o.scaleX||1)*r,scaleY:(o.scaleY||1)*r});o.setCoords();});this._lastZoom=newZoom;canvas.renderAll();}else{if(newZoom)this._lastZoom=newZoom;canvas.renderAll();} },
+      onModified(cb){onMod=cb;},
+      onSelection(cb){onSel=cb;},
+      getCanvas(){return canvas;},
+      toJSON(){return canvas?canvas.toObject(['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough']):null;},
+      resetPages(){ pageData.clear(); if(canvas)canvas.clear(); curPage=0; },
+      destroy(){ if(canvas){canvas.dispose();canvas=null;} pageData.clear(); curPage=0; }
+    };
+  }
+
+  // --- PDF Manager (@cantoo/pdf-lib) ---
+  function createPDFManager() {
+    let pdfDoc=null;
+    const lib=()=>window.PDFLib;
+    return {
+      async load(data){
+        pdfDoc=await lib().PDFDocument.load(new Uint8Array(data),{ignoreEncryption:true});
+        if(window.fontkit)pdfDoc.registerFontkit(window.fontkit);
+        embeddedFontCache.clear(); // 新ドキュメントでは埋め込みフォントキャッシュをリセット
+        const pages=pdfDoc.getPages();
+        return{pageCount:pages.length,title:pdfDoc.getTitle()||'',author:pdfDoc.getAuthor()||''};
+      },
+      async save(){return pdfDoc?await pdfDoc.save():null;},
+      getPageCount(){return pdfDoc?pdfDoc.getPageCount():0;},
+      rotatePage(idx,deg){if(!pdfDoc)return;const p=pdfDoc.getPages()[idx];p.setRotation(lib().degrees(p.getRotation().angle+deg));},
+      deletePage(idx){if(pdfDoc)pdfDoc.removePage(idx);},
+      movePage(fromIdx,toIdx){
+        if(!pdfDoc||fromIdx===toIdx)return;
+        const pages=pdfDoc.getPages();
+        if(fromIdx<0||fromIdx>=pages.length||toIdx<0||toIdx>=pages.length)return;
+        // pdf-libにはmovePageがないため、ページ参照を直接操作
+        const pageTree=pdfDoc.catalog.get(lib().PDFName.of('Pages'));
+        const pagesDict=pageTree instanceof lib().PDFRef?pdfDoc.context.lookup(pageTree):pageTree;
+        const kids=pagesDict.get(lib().PDFName.of('Kids'));
+        if(!kids)return;
+        const arr=kids.asArray?kids.asArray():null;
+        if(!arr||fromIdx>=arr.length)return;
+        const[moved]=arr.splice(fromIdx,1);
+        arr.splice(toIdx,0,moved);
+        pagesDict.set(lib().PDFName.of('Kids'),pdfDoc.context.obj(arr));
+      },
+      insertBlankPage(idx,sz){if(pdfDoc)pdfDoc.insertPage(idx,[sz?.width||595,sz?.height||842]);},
+      async merge(docs){
+        const m=await lib().PDFDocument.create();
+        for(const d of docs){const s=await lib().PDFDocument.load(new Uint8Array(d));const ps=await m.copyPages(s,s.getPageIndices());ps.forEach(p=>m.addPage(p));}
+        return await m.save();
+      },
+      async split(ranges){
+        const res=[];
+        for(const rng of ranges){
+          const nd=await lib().PDFDocument.create();const ids=[];for(let i=rng.start;i<=rng.end;i++)ids.push(i);
+          const ps=await nd.copyPages(pdfDoc,ids);ps.forEach(p=>nd.addPage(p));res.push(await nd.save());
+        }
+        return res;
+      },
+      async splitAll(){const c=this.getPageCount(),r=[];for(let i=0;i<c;i++)r.push({start:i,end:i});return this.split(r);},
+      async embedAnnotations(pageIdx,annotJSON,scale){
+        if(!pdfDoc||!annotJSON?.objects)return;
+        const page=pdfDoc.getPages()[pageIdx];const{height:pH}=page.getSize();
+        const s=1/(scale||1);
+        const S=(v)=>v*s;
+        const flipY=(y,h=0)=>pH-S(y)-S(h);
+        console.log('[PDF Editor] embedAnnotations page='+pageIdx+' objects='+annotJSON.objects.length+' scale='+scale);
+        // フォント解決ヘルパー（キャッシュ付き）
+        const docId=pdfDoc.toString();
+        async function resolveFont(fontFamily,text,pdfFontKey){
+          // _pdfFontKey > fontFamily > auto-detect
+          let key=pdfFontKey||fontFamily||'Helvetica';
+          // FONT_DEFSにないCSS値→マッピング
+          if(!FONT_DEFS[key]){
+            if(key.includes('Noto Sans JP'))key='Noto Sans JP';
+            else if(key.includes('Noto Serif JP'))key='Noto Serif JP';
+            else if(key.includes('serif')||key.includes('Times'))key='Times-Roman';
+            else if(key.includes('mono')||key.includes('Courier'))key='Courier';
+            else key='Helvetica';
+          }
+          if(hasNonLatin(text||'')&&!FONT_DEFS[key]?.type?.includes('custom')){key='Noto Sans JP';}
+          const cacheKey=docId+'_'+key;
+          if(embeddedFontCache.has(cacheKey))return embeddedFontCache.get(cacheKey);
+          const def=FONT_DEFS[key];
+          let f;
+          if(def&&def.type==='custom'){
+            const bytes=await fetchFontBytes(key);
+            f=await pdfDoc.embedFont(bytes,{subset:false});
+          }else if(def&&def.type==='standard'){
+            f=await pdfDoc.embedFont(lib().StandardFonts[def.standard]||lib().StandardFonts.Helvetica);
+          }else{
+            f=await pdfDoc.embedFont(lib().StandardFonts.Helvetica);
+          }
+          embeddedFontCache.set(cacheKey,f);
+          return f;
+        }
+        for(let oi=0;oi<annotJSON.objects.length;oi++){
+          const obj=annotJSON.objects[oi];
+          const t=(obj.type||'').toLowerCase();
+          const ct=obj.customType||'';
+          console.log('[PDF Editor] embed obj['+oi+'] type='+obj.type+' customType='+ct+' text='+(obj.text||'').substring(0,30)+' _originalText='+(obj._originalText||'').substring(0,30)+' _isModified='+obj._isModified);
+          try{
+            // --- PDFテキスト編集（白矩形+再描画方式）---
+            if(ct==='pdfText'){
+              const textChanged=(obj.text||'')!==(obj._originalText||'');
+              console.log('[PDF Editor] pdfText textChanged='+textChanged+' _isModified='+obj._isModified+' hasOrig='+!!(obj._pdfOriginal));
+              if(!textChanged&&!obj._isModified)continue; // 未編集はスキップ
+              const orig=obj._pdfOriginal;
+              if(orig){
+                // 元テキストを白矩形で覆い隠す
+                const ox=orig.transform[4],oy=orig.transform[5];
+                const oFs=Math.sqrt(orig.transform[0]**2+orig.transform[1]**2);
+                console.log('[PDF Editor] 白矩形: x='+ox+' y='+(oy-2)+' w='+(orig.width+4)+' h='+(oFs+4)+' origStr="'+orig.str+'"');
+                page.drawRectangle({x:ox-1,y:oy-2,width:orig.width+4,height:oFs+4,color:lib().rgb(1,1,1),borderWidth:0});
+                // マージされた追加テキスト分も白矩形
+                if(orig._merged){for(const m of orig._merged){
+                  const mx=m.transform[4],my=m.transform[5],mFs=Math.sqrt(m.transform[0]**2+m.transform[1]**2);
+                  page.drawRectangle({x:mx-1,y:my-2,width:m.width+4,height:mFs+4,color:lib().rgb(1,1,1),borderWidth:0});
+                }}
+              }
+              // 新しいテキストを描画
+              const dispFs=(obj.fontSize||16)*(obj.scaleY||1);
+              const fs=S(dispFs);
+              const txtFont=await resolveFont(obj.fontFamily,obj.text,obj._pdfFontKey);
+              const textColor=obj.fill?lib().rgb(...hexToRgb(obj.fill)):lib().rgb(0,0,0);
+              const lines=(obj.text||'').split('\n');
+              let yOff=0;
+              for(const line of lines){
+                if(line.trim()){
+                  const lyY=flipY(obj.top+yOff,dispFs);
+                  page.drawText(line,{x:S(obj.left),y:lyY,size:fs,font:txtFont,
+                    color:textColor,opacity:obj.opacity??1});
+                  if(obj.underline){const tw=txtFont.widthOfTextAtSize(line,fs);page.drawLine({start:{x:S(obj.left),y:lyY-fs*0.15},end:{x:S(obj.left)+tw,y:lyY-fs*0.15},color:textColor,thickness:fs*0.05});}
+                  if(obj.linethrough){const tw=txtFont.widthOfTextAtSize(line,fs);page.drawLine({start:{x:S(obj.left),y:lyY+fs*0.35},end:{x:S(obj.left)+tw,y:lyY+fs*0.35},color:textColor,thickness:fs*0.05});}
+                }
+                yOff+=dispFs*1.2;
+              }
+              continue;
+            }
+            // --- 図形注釈編集（注釈はdoSaveで削除済み、Fabricオブジェクトとして通常の注釈switch処理で再描画）---
+            if(ct==='shapeAnnot'&&!obj._isModified)continue;
+            // --- コンテンツストリーム図形編集（白矩形で元を覆い隠し、専用処理で再描画）---
+            if(ct==='csShape'){
+              if(!obj._isModified)continue;
+              const orig=obj._csOriginal;
+              const csPH=page.getSize().height;
+              if(orig){
+                const margin=(orig.lineWidth||2)+4;
+                let bx,by,bw,bh;
+                if(orig.shape==='rect'){bx=orig.x;by=orig.y;bw=orig.w;bh=orig.h;}
+                else if(orig.shape==='line'){bx=Math.min(orig.x1,orig.x2);by=Math.min(orig.y1,orig.y2);bw=Math.max(Math.abs(orig.x2-orig.x1),1);bh=Math.max(Math.abs(orig.y2-orig.y1),1);}
+                else if(orig.shape==='path'&&orig.bbox){bx=orig.bbox.x;by=orig.bbox.y;bw=orig.bbox.w;bh=orig.bbox.h;}
+                if(bw>0||bh>0){
+                  page.drawRectangle({x:bx-margin,y:csPH-(by+bh)-margin,width:bw+margin*2,height:bh+margin*2,color:lib().rgb(1,1,1),borderWidth:0});
+                }
+              }
+              // csShape専用描画: Fabric座標→PDF座標
+              const csStroke=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined;
+              const csFill=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;
+              const csLW=S(obj.strokeWidth||1);
+              const csOp=obj.opacity??1;
+              if(t==='rect'){
+                const rw=S((obj.width||0)*(obj.scaleX||1)),rh=S((obj.height||0)*(obj.scaleY||1));
+                page.drawRectangle({x:S(obj.left),y:csPH-S(obj.top)-rh,width:rw,height:rh,
+                  borderColor:csStroke,borderWidth:csLW,color:csFill,opacity:csOp});
+              } else if(t==='line'){
+                page.drawLine({start:{x:S((obj.x1||0)+(obj.left||0)),y:csPH-S((obj.y1||0)+(obj.top||0))},
+                  end:{x:S((obj.x2||0)+(obj.left||0)),y:csPH-S((obj.y2||0)+(obj.top||0))},
+                  color:csStroke||lib().rgb(0,0,0),thickness:csLW,opacity:csOp});
+              } else if(t==='path'&&obj.path){
+                // Fabric.Pathの座標系: path segmentは絶対座標、pathOffsetはパスデータの中心
+                // canvas座標 = left + width*scaleX/2 + (seg_x - pathCenter_x)*scaleX
+                let pMinX=Infinity,pMinY=Infinity,pMaxX=-Infinity,pMaxY=-Infinity;
+                for(const seg of obj.path){
+                  if(seg[0]==='Z')continue;
+                  for(let si=1;si<seg.length;si+=2){
+                    if(typeof seg[si]==='number'&&typeof seg[si+1]==='number'){
+                      pMinX=Math.min(pMinX,seg[si]);pMaxX=Math.max(pMaxX,seg[si]);
+                      pMinY=Math.min(pMinY,seg[si+1]);pMaxY=Math.max(pMaxY,seg[si+1]);
+                    }
+                  }
+                }
+                const pCx=(pMinX+pMaxX)/2,pCy=(pMinY+pMaxY)/2;
+                const ssx=obj.scaleX||1,ssy=obj.scaleY||1;
+                const hw=(obj.width||0)*ssx/2,hh=(obj.height||0)*ssy/2;
+                // 各pathポイントのキャンバス座標を計算
+                function csPathPt(px,py){
+                  const cx=(obj.left||0)+hw+(px-pCx)*ssx;
+                  const cy=(obj.top||0)+hh+(py-pCy)*ssy;
+                  return{x:S(cx),y:csPH-S(cy)};
+                }
+                // ベジェ曲線を線形化して描画
+                function lerp2(a,b,t2){return a+(b-a)*t2;}
+                function bezQ2(p0,cp,p1,n){const pts=[];for(let i=1;i<=n;i++){const t2=i/n;pts.push({x:lerp2(lerp2(p0.x,cp.x,t2),lerp2(cp.x,p1.x,t2),t2),y:lerp2(lerp2(p0.y,cp.y,t2),lerp2(cp.y,p1.y,t2),t2)});} return pts;}
+                function bezC2(p0,c1,c2,p1,n){const pts=[];for(let i=1;i<=n;i++){const t2=i/n;pts.push({x:(1-t2)**3*p0.x+3*(1-t2)**2*t2*c1.x+3*(1-t2)*t2**2*c2.x+t2**3*p1.x,y:(1-t2)**3*p0.y+3*(1-t2)**2*t2*c1.y+3*(1-t2)*t2**2*c2.y+t2**3*p1.y});} return pts;}
+                const allPts=[];let cpx=0,cpy=0,startX=0,startY=0;
+                for(const seg of obj.path){
+                  const op=seg[0];
+                  if(op==='M'){cpx=seg[1];cpy=seg[2];startX=cpx;startY=cpy;allPts.push(csPathPt(cpx,cpy));}
+                  else if(op==='L'){cpx=seg[1];cpy=seg[2];allPts.push(csPathPt(cpx,cpy));}
+                  else if(op==='Q'){const pts=bezQ2(csPathPt(cpx,cpy),csPathPt(seg[1],seg[2]),csPathPt(seg[3],seg[4]),6);allPts.push(...pts);cpx=seg[3];cpy=seg[4];}
+                  else if(op==='C'){const pts=bezC2(csPathPt(cpx,cpy),csPathPt(seg[1],seg[2]),csPathPt(seg[3],seg[4]),csPathPt(seg[5],seg[6]),8);allPts.push(...pts);cpx=seg[5];cpy=seg[6];}
+                  else if(op==='Z'){allPts.push(csPathPt(startX,startY));}
+                }
+                // 塗りつぶし+ストロークをPDF operatorsで描画
+                if(csFill&&allPts.length>=3){
+                  const PDFLib=lib();
+                  const ops=[PDFLib.pushGraphicsState()];
+                  ops.push(PDFLib.setFillingColor(csFill));
+                  if(csStroke)ops.push(PDFLib.setStrokingColor(csStroke));
+                  ops.push(PDFLib.setLineWidth(csLW));
+                  ops.push(PDFLib.moveTo(allPts[0].x,allPts[0].y));
+                  for(let pi=1;pi<allPts.length;pi++)ops.push(PDFLib.lineTo(allPts[pi].x,allPts[pi].y));
+                  ops.push(PDFLib.closePath());
+                  ops.push(csStroke?PDFLib.fillAndStroke():PDFLib.fill());
+                  ops.push(PDFLib.popGraphicsState());
+                  page.pushOperators(...ops);
+                } else {
+                  const csCol=csStroke||lib().rgb(0,0,0);
+                  for(let pi=1;pi<allPts.length;pi++){
+                    page.drawLine({start:allPts[pi-1],end:allPts[pi],color:csCol,thickness:csLW,opacity:csOp});
+                  }
+                }
+              }
+              continue;
+            }
+            // --- FreeText注釈編集（注釈はdoSaveで削除済み、新テキストをコンテンツストリームに描画）---
+            if(ct==='freeTextAnnot'){
+              const textChanged=(obj.text||'')!==(obj._originalText||'');
+              if(!textChanged&&!obj._isModified)continue;
+              const dispFs=(obj.fontSize||16)*(obj.scaleY||1);
+              const fs=S(dispFs);
+              const txtFont=await resolveFont(obj.fontFamily,obj.text,obj._pdfFontKey);
+              const ftColor=obj.fill?lib().rgb(...hexToRgb(obj.fill)):lib().rgb(0,0,0);
+              const lines=(obj.text||'').split('\n');
+              let yOff=0;
+              for(const line of lines){
+                if(line.trim()){
+                  const lyY=flipY(obj.top+yOff,dispFs);
+                  page.drawText(line,{x:S(obj.left),y:lyY,size:fs,font:txtFont,
+                    color:ftColor,opacity:obj.opacity??1});
+                  if(obj.underline){const tw=txtFont.widthOfTextAtSize(line,fs);page.drawLine({start:{x:S(obj.left),y:lyY-fs*0.15},end:{x:S(obj.left)+tw,y:lyY-fs*0.15},color:ftColor,thickness:fs*0.05});}
+                  if(obj.linethrough){const tw=txtFont.widthOfTextAtSize(line,fs);page.drawLine({start:{x:S(obj.left),y:lyY+fs*0.35},end:{x:S(obj.left)+tw,y:lyY+fs*0.35},color:ftColor,thickness:fs*0.05});}
+                }
+                yOff+=dispFs*1.2;
+              }
+              continue;
+            }
+            // --- 通常の注釈 ---
+            switch(t){
+              case'rect':page.drawRectangle({x:S(obj.left),y:flipY(obj.top,obj.height*(obj.scaleY||1)),width:S(obj.width*(obj.scaleX||1)),height:S(obj.height*(obj.scaleY||1)),borderColor:obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;
+              case'circle':case'ellipse':{const rx=S((obj.rx||obj.radius||0)*(obj.scaleX||1)),ry=S((obj.ry||obj.radius||0)*(obj.scaleY||1));page.drawEllipse({x:S(obj.left)+rx,y:flipY(obj.top+(obj.ry||obj.radius||0)*(obj.scaleY||1)),xScale:rx,yScale:ry,borderColor:obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;}
+              case'triangle':{const w=S((obj.width||0)*(obj.scaleX||1)),h=S((obj.height||0)*(obj.scaleY||1)),bx=S(obj.left||0),by=flipY(obj.top||0,obj.height*(obj.scaleY||1));const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);page.drawLine({start:{x:bx+w/2,y:by+h},end:{x:bx,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx,y:by},end:{x:bx+w,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx+w,y:by},end:{x:bx+w/2,y:by+h},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
+              case'line':page.drawLine({start:{x:S((obj.x1||0)+(obj.left||0)),y:flipY((obj.y1||0)+(obj.top||0))},end:{x:S((obj.x2||0)+(obj.left||0)),y:flipY((obj.y2||0)+(obj.top||0))},color:obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0),thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;
+              case'path':{
+                if(!obj.path)break;
+                const ox=S(obj.left||0),oy=obj.top||0;const ssx=obj.scaleX||1,ssy=obj.scaleY||1;
+                const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);
+                const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;
+                const th=S(obj.strokeWidth||2);
+                // Linearize bezier curves for PDF
+                function lerp(a,b,t){return a+(b-a)*t;}
+                function bezierQ(p0,cp,p1,steps){const pts=[];for(let i=1;i<=steps;i++){const t=i/steps;const x=lerp(lerp(p0.x,cp.x,t),lerp(cp.x,p1.x,t),t);const y=lerp(lerp(p0.y,cp.y,t),lerp(cp.y,p1.y,t),t);pts.push({x,y});}return pts;}
+                function bezierC(p0,c1,c2,p1,steps){const pts=[];for(let i=1;i<=steps;i++){const t=i/steps;const x=(1-t)**3*p0.x+3*(1-t)**2*t*c1.x+3*(1-t)*t**2*c2.x+t**3*p1.x;const y=(1-t)**3*p0.y+3*(1-t)**2*t*c1.y+3*(1-t)*t**2*c2.y+t**3*p1.y;pts.push({x,y});}return pts;}
+                // Build linearized point list
+                const allPts=[];let cx=0,cy=0;
+                for(const seg of obj.path){
+                  if(seg[0]==='M'){cx=seg[1]*ssx;cy=seg[2]*ssy;allPts.push({x:cx,y:cy});}
+                  else if(seg[0]==='L'){cx=seg[1]*ssx;cy=seg[2]*ssy;allPts.push({x:cx,y:cy});}
+                  else if(seg[0]==='Q'){const pts=bezierQ({x:cx,y:cy},{x:seg[1]*ssx,y:seg[2]*ssy},{x:seg[3]*ssx,y:seg[4]*ssy},6);allPts.push(...pts);cx=seg[3]*ssx;cy=seg[4]*ssy;}
+                  else if(seg[0]==='C'){const pts=bezierC({x:cx,y:cy},{x:seg[1]*ssx,y:seg[2]*ssy},{x:seg[3]*ssx,y:seg[4]*ssy},{x:seg[5]*ssx,y:seg[6]*ssy},8);allPts.push(...pts);cx=seg[5]*ssx;cy=seg[6]*ssy;}
+                  else if(seg[0]==='Z'&&allPts.length>0){allPts.push({...allPts[0]});}
+                }
+                for(let i=1;i<allPts.length;i++){
+                  page.drawLine({start:{x:ox+S(allPts[i-1].x),y:flipY(oy+allPts[i-1].y)},end:{x:ox+S(allPts[i].x),y:flipY(oy+allPts[i].y)},color:col,thickness:th,opacity:obj.opacity??1});
+                }
+                break;
+              }
+              case'textbox':case'i-text':case'itext':case'text':{const dFs=(obj.fontSize||16)*(obj.scaleY||1);const fs=S(dFs);const txtFont=await resolveFont(obj.fontFamily,obj.text,obj._pdfFontKey);const tbColor=obj.fill?lib().rgb(...hexToRgb(obj.fill)):lib().rgb(0,0,0);const tLines=(obj.text||'').split('\n');let tOff=0;for(const tl of tLines){if(tl.trim()){const tlY=flipY(obj.top+tOff,dFs);page.drawText(tl,{x:S(obj.left),y:tlY,size:fs,font:txtFont,color:tbColor,opacity:obj.opacity??1});if(obj.underline){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY-fs*0.15},end:{x:S(obj.left)+tw,y:tlY-fs*0.15},color:tbColor,thickness:fs*0.05});}if(obj.linethrough){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY+fs*0.35},end:{x:S(obj.left)+tw,y:tlY+fs*0.35},color:tbColor,thickness:fs*0.05});}}tOff+=dFs*1.2;}break;}
+              case'polygon':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=0;pi<obj.points.length;pi++){const cur=obj.points[pi],nxt=obj.points[(pi+1)%obj.points.length];page.drawLine({start:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},end:{x:ox+S(nxt.x*sx),y:flipY(oy+nxt.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
+              case'polyline':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=1;pi<obj.points.length;pi++){const prev=obj.points[pi-1],cur=obj.points[pi];page.drawLine({start:{x:ox+S(prev.x*sx),y:flipY(oy+prev.y*sy)},end:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
+              case'group':if(obj.objects)for(const ch of obj.objects){const adj={...ch,left:(ch.left||0)*(obj.scaleX||1)+(obj.left||0),top:(ch.top||0)*(obj.scaleY||1)+(obj.top||0),scaleX:(ch.scaleX||1)*(obj.scaleX||1),scaleY:(ch.scaleY||1)*(obj.scaleY||1),strokeWidth:ch.strokeWidth||obj.strokeWidth||1,stroke:ch.stroke||obj.stroke,fill:ch.fill||obj.fill,opacity:ch.opacity??obj.opacity??1};annotJSON.objects.push(adj);}break;
+              default:console.warn('[PDF Editor] Unknown annotation type: "'+obj.type+'" — skipped');break;
+            }
+          }catch(e){console.error('[PDF Editor] 注釈埋込失敗 type='+obj.type+' customType='+ct+':',e);}
+        }
+      },
+      async addWatermark(text,opts={}){
+        if(!pdfDoc)return;const font=await pdfDoc.embedFont(lib().StandardFonts.Helvetica);
+        for(const p of pdfDoc.getPages()){const{width:w,height:h}=p.getSize();p.drawText(text,{x:w/4,y:h/2,size:opts.fontSize||48,font,color:lib().rgb(.5,.5,.5),opacity:opts.opacity||.2,rotate:lib().degrees(opts.rotation||-45)});}
+      },
+      async addPageNumbers(opts={}){
+        if(!pdfDoc)return;const font=await pdfDoc.embedFont(lib().StandardFonts.Helvetica);const pages=pdfDoc.getPages();
+        for(let i=0;i<pages.length;i++){const p=pages[i];const{width:w}=p.getSize();const txt=(opts.format||'{n}').replace('{n}',String(i+(opts.startFrom||1))).replace('{total}',String(pages.length));const tw=font.widthOfTextAtSize(txt,opts.fontSize||12);
+        let x,y;const pos=opts.position||'bottom-center';const mg=30;if(pos.includes('left'))x=mg;else if(pos.includes('right'))x=w-tw-mg;else x=(w-tw)/2;if(pos.includes('top'))y=p.getSize().height-mg;else y=mg;
+        p.drawText(txt,{x,y,size:opts.fontSize||12,font,color:lib().rgb(0,0,0)});}
+      },
+      async addHeaderFooter(opts={}){
+        if(!pdfDoc)return;const font=await pdfDoc.embedFont(lib().StandardFonts.Helvetica);const fs=opts.fontSize||10,mg=opts.margin||30;
+        for(const p of pdfDoc.getPages()){const{width:w,height:h}=p.getSize();
+          if(opts.header){const tw=font.widthOfTextAtSize(opts.header,fs);p.drawText(opts.header,{x:(w-tw)/2,y:h-mg,size:fs,font,color:lib().rgb(0,0,0)});}
+          if(opts.footer){const tw=font.widthOfTextAtSize(opts.footer,fs);p.drawText(opts.footer,{x:(w-tw)/2,y:mg,size:fs,font,color:lib().rgb(0,0,0)});}
+        }
+      },
+      getFormFields(){
+        if(!pdfDoc)return[];
+        try{const form=pdfDoc.getForm();return form.getFields().map(f=>{const cn=f.constructor.name;let type='text';if(cn.includes('CheckBox'))type='checkbox';else if(cn.includes('Radio'))type='radio';else if(cn.includes('Dropdown'))type='dropdown';let val='';try{if(type==='checkbox')val=f.isChecked();else if(type==='text')val=f.getText()||'';}catch(e){}return{name:f.getName(),type,value:val};});}catch(e){return[];}
+      },
+      setFormFieldValue(name,val){
+        if(!pdfDoc)return;try{const f=pdfDoc.getForm().getField(name);const cn=f.constructor.name;if(cn.includes('CheckBox')){if(val)f.check();else f.uncheck();}else{f.setText(String(val));}}catch(e){}
+      },
+      getFreeTextAnnotations(pageIdx){
+        if(!pdfDoc)return[];
+        const page=pdfDoc.getPages()[pageIdx];
+        const annots=page.node.Annots();
+        if(!annots)return[];
+        const results=[],PDFName=lib().PDFName;
+        try{
+          for(let i=0;i<annots.size();i++){
+            try{
+              const ref=annots.get(i);
+              const dict=ref instanceof lib().PDFRef?pdfDoc.context.lookup(ref):ref;
+              if(!dict||!dict.get)continue;
+              const subtype=dict.get(PDFName.of('Subtype'));
+              if(!subtype||subtype.toString()!=='/FreeText')continue;
+              const rect=dict.get(PDFName.of('Rect'));
+              if(!rect)continue;
+              const r=[rect.get(0).asNumber(),rect.get(1).asNumber(),rect.get(2).asNumber(),rect.get(3).asNumber()];
+              const contents=dict.get(PDFName.of('Contents'));
+              const text=contents?(contents.decodeText?contents.decodeText():contents.toString().replace(/^\(/,'').replace(/\)$/,'')):'';
+              let fontSize=12;
+              const da=dict.get(PDFName.of('DA'));
+              if(da){const daStr=da.decodeText?da.decodeText():da.toString();const m=daStr.match(/(\d+(?:\.\d+)?)\s+Tf/);if(m)fontSize=parseFloat(m[1]);}
+              let fillColor='#000000';
+              const dsStr=da?(da.decodeText?da.decodeText():da.toString()):'';
+              const rgMatch=dsStr.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/);
+              if(rgMatch)fillColor='#'+[rgMatch[1],rgMatch[2],rgMatch[3]].map(v=>Math.round(parseFloat(v)*255).toString(16).padStart(2,'0')).join('');
+              results.push({text,fontSize,fillColor,rect:{x1:Math.min(r[0],r[2]),y1:Math.min(r[1],r[3]),x2:Math.max(r[0],r[2]),y2:Math.max(r[1],r[3])},annotIndex:i});
+            }catch(e){console.warn('[PDF Editor] FreeText注釈読取失敗 index='+i,e);}
+          }
+        }catch(e){console.warn('[PDF Editor] 注釈一覧取得失敗:',e);}
+        return results;
+      },
+      // PDF図形注釈（Circle, Square, Line, Ink, Polygon, PolyLine, Highlight, Underline, StrikeOut）を取得
+      getShapeAnnotations(pageIdx){
+        if(!pdfDoc)return[];
+        const page=pdfDoc.getPages()[pageIdx];
+        const annots=page.node.Annots();
+        if(!annots)return[];
+        const results=[],PDFName=lib().PDFName;
+        const SHAPE_SUBTYPES=['/Circle','/Square','/Line','/Ink','/Polygon','/PolyLine','/Highlight','/Underline','/StrikeOut'];
+        // PDF色配列([0-1, 0-1, 0-1])→HEX変換ヘルパー
+        function pdfColorToHex(arr){
+          if(!arr)return null;
+          try{
+            const vals=[];for(let i=0;i<arr.size();i++)vals.push(arr.get(i).asNumber());
+            if(vals.length===3)return'#'+vals.map(v=>Math.round(v*255).toString(16).padStart(2,'0')).join('');
+            if(vals.length===1){const g=Math.round(vals[0]*255).toString(16).padStart(2,'0');return'#'+g+g+g;}
+          }catch(e){}
+          return null;
+        }
+        try{
+          for(let i=0;i<annots.size();i++){
+            try{
+              const ref=annots.get(i);
+              const dict=ref instanceof lib().PDFRef?pdfDoc.context.lookup(ref):ref;
+              if(!dict||!dict.get)continue;
+              const subtype=dict.get(PDFName.of('Subtype'));
+              if(!subtype)continue;
+              const stStr=subtype.toString();
+              if(!SHAPE_SUBTYPES.includes(stStr))continue;
+              const subtypeName=stStr.slice(1); // '/Circle' → 'Circle'
+              const rect=dict.get(PDFName.of('Rect'));
+              if(!rect)continue;
+              const r=[rect.get(0).asNumber(),rect.get(1).asNumber(),rect.get(2).asNumber(),rect.get(3).asNumber()];
+              const info={subtype:subtypeName,rect:{x1:Math.min(r[0],r[2]),y1:Math.min(r[1],r[3]),x2:Math.max(r[0],r[2]),y2:Math.max(r[1],r[3])},annotIndex:i,color:null,interiorColor:null,borderWidth:1,opacity:1,vertices:null,inkList:null};
+              // 色情報
+              const cArr=dict.get(PDFName.of('C'));
+              info.color=pdfColorToHex(cArr)||'#000000';
+              const icArr=dict.get(PDFName.of('IC'));
+              info.interiorColor=pdfColorToHex(icArr);
+              // 境界幅
+              const bs=dict.get(PDFName.of('BS'));
+              if(bs&&bs.get){const w=bs.get(PDFName.of('W'));if(w)info.borderWidth=w.asNumber();}
+              else{const border=dict.get(PDFName.of('Border'));if(border&&border.size&&border.size()>=3)try{info.borderWidth=border.get(2).asNumber();}catch(e){}}
+              // 透明度
+              const ca=dict.get(PDFName.of('CA'));
+              if(ca)try{info.opacity=ca.asNumber();}catch(e){}
+              // Line用頂点
+              if(subtypeName==='Line'){const l=dict.get(PDFName.of('L'));if(l&&l.size&&l.size()>=4)info.vertices=[l.get(0).asNumber(),l.get(1).asNumber(),l.get(2).asNumber(),l.get(3).asNumber()];}
+              // Polygon/PolyLine用頂点
+              if(subtypeName==='Polygon'||subtypeName==='PolyLine'){const v=dict.get(PDFName.of('Vertices'));if(v&&v.size){const pts=[];for(let j=0;j<v.size();j++)pts.push(v.get(j).asNumber());info.vertices=pts;}}
+              // Ink用パスリスト
+              if(subtypeName==='Ink'){const il=dict.get(PDFName.of('InkList'));if(il&&il.size){const paths=[];for(let j=0;j<il.size();j++){const subArr=il.get(j);if(subArr&&subArr.size){const pts=[];for(let k=0;k<subArr.size();k++)pts.push(subArr.get(k).asNumber());paths.push(pts);}}info.inkList=paths;}}
+              // Highlight/Underline/StrikeOut用QuadPoints
+              if(subtypeName==='Highlight'||subtypeName==='Underline'||subtypeName==='StrikeOut'){const qp=dict.get(PDFName.of('QuadPoints'));if(qp&&qp.size){const pts=[];for(let j=0;j<qp.size();j++)pts.push(qp.get(j).asNumber());info.quadPoints=pts;}}
+              results.push(info);
+            }catch(e){console.warn('[PDF Editor] 図形注釈読取失敗 index='+i,e);}
+          }
+        }catch(e){console.warn('[PDF Editor] 図形注釈一覧取得失敗:',e);}
+        return results;
+      },
+      removeFreeTextAnnotation(pageIdx,annotIndex){
+        try{
+          const page=pdfDoc.getPages()[pageIdx];
+          const annots=page.node.Annots();
+          if(!annots){console.warn('[PDF Editor] Annots なし');return;}
+          const sz=annots.size();
+          console.log('[PDF Editor] removeFreeText pageIdx='+pageIdx+' annotIndex='+annotIndex+' total='+sz);
+          if(annotIndex>=0&&annotIndex<sz){
+            // spliceでarray内から直接削除
+            annots.context=annots.context||pdfDoc.context;
+            const arr=annots.asArray?annots.asArray():null;
+            if(arr){
+              arr.splice(annotIndex,1);
+              // PDFArrayを再構築
+              const PDFName=lib().PDFName;
+              const newAnnots=pdfDoc.context.obj(arr);
+              page.node.set(PDFName.of('Annots'),newAnnots);
+              console.log('[PDF Editor] 注釈削除成功(再構築) 残り='+arr.length);
+            }else{
+              annots.remove(annotIndex);
+              console.log('[PDF Editor] 注釈削除成功(remove) 残り='+annots.size());
+            }
+          }
+        }catch(e){console.error('[PDF Editor] FreeText注釈削除失敗:',e);}
+      },
+      updateFreeTextAnnotation(pageIdx,annotIndex,newText){
+        try{
+          const page=pdfDoc.getPages()[pageIdx];
+          const annots=page.node.Annots();
+          if(!annots||annotIndex>=annots.size())return false;
+          const ref=annots.get(annotIndex);
+          const dict=ref instanceof lib().PDFRef?pdfDoc.context.lookup(ref):ref;
+          if(!dict||!dict.set)return false;
+          const PDFName=lib().PDFName,PDFHexString=lib().PDFHexString;
+          // Contents更新
+          dict.set(PDFName.of('Contents'),PDFHexString.fromText(newText));
+          // 外観ストリーム(AP)を削除して再生成を促す
+          dict.delete(PDFName.of('AP'));
+          console.log('[PDF Editor] FreeText注釈更新: index='+annotIndex);
+          return true;
+        }catch(e){console.warn('[PDF Editor] FreeText注釈更新失敗:',e);return false;}
+      },
+      getDoc(){return pdfDoc;}
+    };
+  }
+
+  // === Instances ===
+  const RL = createRenderLayer();
+  const AL = createAnnotationLayer();
+  const PM = createPDFManager();
+  const HM = createHistoryManager();
+  // テスト用グローバル参照（デバッグ完了後削除可）
+  window.__AL=AL;window.__PM=PM;window.__RL=RL;
+
+  // === Theme ===
+  let darkMode = localStorage.getItem('pdf-dark')==='true';
+  function applyTheme(){ document.documentElement.classList.toggle('dark',darkMode); }
+  applyTheme();
+
+  // ===================== COMPONENTS =====================
+
+  function ShapeDropdown(p){
+    const[open,setOpen]=useState(false);
+    const ref=useRef(null);
+    useEffect(()=>{if(!open)return;const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};document.addEventListener('mousedown',h);return()=>document.removeEventListener('mousedown',h);},[open]);
+    const items=p.items;const activeItem=items.find(i=>i[0]===p.activeTool);
+    const mainIcon=activeItem?activeItem[2]:items[0][2];
+    const isActive=items.some(i=>i[0]===p.activeTool);
+    return html`<div class="shape-dropdown" ref=${ref}>
+      <button class="tool-btn ${isActive?'active':''}" onClick=${()=>p.onToolChange(activeItem?activeItem[0]:items[0][0])} title=${activeItem?activeItem[1]:items[0][1]}>${mainIcon}</button>
+      <button class="shape-dropdown-btn" onClick=${()=>setOpen(!open)}>▼</button>
+      ${open?html`<div class="shape-dropdown-panel">
+        ${items.map(([t,label,icon])=>html`<button class=${p.activeTool===t?'active':''} title=${label} onClick=${()=>{p.onToolChange(t);setOpen(false);}}>${icon}</button>`)}
+      </div>`:null}
+    </div>`;
+  }
+
+  function Toolbar(p){
+    const tb=(t,label,icon)=>html`<button class="tool-btn ${p.activeTool===t?'active':''}" onClick=${()=>p.onToolChange(t)} title=${label}>${icon}</button>`;
+    const zp=Math.round(p.zoom*100);
+    const shapeItems=[[TOOLS.RECT,'矩形(R)','⬜'],[TOOLS.CIRCLE,'円(C)','⭕'],[TOOLS.ELLIPSE,'楕円(E)','⬮'],[TOOLS.TRIANGLE,'三角形','△'],[TOOLS.DIAMOND,'ひし形','◇'],[TOOLS.POLYGON,'多角形','⬡'],[TOOLS.STAR,'星','★'],[TOOLS.CROSS,'十字','✚'],[TOOLS.HEART,'ハート','♥'],[TOOLS.CLOUD,'雲','☁'],[TOOLS.CLOUD_CALLOUT,'雲吹出し','🗨☁'],[TOOLS.CALLOUT,'吹き出し','💬'],[TOOLS.BRACE,'括弧','﹛']];
+    const arrowItems=[[TOOLS.LINE,'線(L)','╱'],[TOOLS.ARROW,'矢印(A)','→'],[TOOLS.DOUBLE_ARROW,'両矢印','↔'],[TOOLS.CURVED_ARROW,'曲線矢印','↩']];
+    return html`
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${p.onOpen} title="開く">📂</button>
+          <button class="tool-btn" onClick=${p.onSave} title="保存(Ctrl+S)">💾</button>
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${p.onUndo} disabled=${!p.canUndo} title="元に戻す">↩️</button>
+          <button class="tool-btn" onClick=${p.onRedo} disabled=${!p.canRedo} title="やり直し">↪️</button>
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          ${tb(TOOLS.SELECT,'選択(V)','🔲')} ${tb(TOOLS.PAN,'パン','✋')}
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <${ShapeDropdown} items=${shapeItems} activeTool=${p.activeTool} onToolChange=${p.onToolChange} />
+          <${ShapeDropdown} items=${arrowItems} activeTool=${p.activeTool} onToolChange=${p.onToolChange} />
+          ${tb(TOOLS.PENCIL,'ペン(P)','✏️')}
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          ${tb(TOOLS.TEXT,'テキスト追加(T)','🔤')} ${tb(TOOLS.TEXT_EDIT,'テキスト編集(D)','📝✏️')} ${tb(TOOLS.SHAPE_EDIT,'図形編集(E)','🔷✏️')} ${tb(TOOLS.IMAGE,'画像','🖼️')} ${tb(TOOLS.HIGHLIGHT,'ハイライト(H)','🖍️')} ${tb(TOOLS.STAMP,'スタンプ(S)','📌')} ${tb(TOOLS.NOTE,'付箋(N)','📝')}
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${p.onRotL} title="左回転">↺</button>
+          <button class="tool-btn" onClick=${p.onRotR} title="右回転">↻</button>
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${()=>p.onPage(p.curPage-1)} disabled=${p.curPage<=1}>◀</button>
+          <input type="number" class="page-input" value=${p.curPage} min="1" max=${p.total} onInput=${e=>{const v=parseInt(e.target.value);if(v>=1&&v<=p.total)p.onPage(v);}} />
+          <span class="page-total">/ ${p.total}</span>
+          <button class="tool-btn" onClick=${()=>p.onPage(p.curPage+1)} disabled=${p.curPage>=p.total}>▶</button>
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${()=>p.onZoom(Math.max(ZOOM_MIN,p.zoom-ZOOM_STEP))}>➖</button>
+          <input type="number" class="zoom-input" value=${zp} min=${ZOOM_MIN*100} max=${ZOOM_MAX*100} onInput=${e=>{const z=parseInt(e.target.value)/100;if(z>=ZOOM_MIN&&z<=ZOOM_MAX)p.onZoom(z);}} />
+          <span class="zoom-unit">%</span>
+          <button class="tool-btn" onClick=${()=>p.onZoom(Math.min(ZOOM_MAX,p.zoom+ZOOM_STEP))}>➕</button>
+        </div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${p.onMerge} title="マージ">📎</button>
+          <button class="tool-btn" onClick=${p.onSplit} title="分割">✂️</button>
+          <button class="tool-btn" onClick=${p.onWM} title="透かし">💧</button>
+          <button class="tool-btn" onClick=${p.onPN} title="ページ番号">🔢</button>
+          <button class="tool-btn" onClick=${p.onHF} title="ヘッダー/フッター">📄</button>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group">
+          <button class="tool-btn" onClick=${p.onDark} title="ダークモード">${p.dark?'☀️':'🌙'}</button>
+          <button class="tool-btn" onClick=${p.onHelp} title="ヘルプ(?)">❓</button>
+        </div>
+      </div>`;
+  }
+
+  function PropsBar(p){
+    const s=p.sp, isTxt=p.tool===TOOLS.TEXT||p.tool===TOOLS.TEXT_EDIT, isSt=p.tool===TOOLS.STAMP;
+    return html`<div class="props-bar">
+      ${isTxt?html`<label>文字色: <input type="color" value=${s.textColor||'#000000'} onInput=${e=>p.onP({textColor:e.target.value})} /></label>`
+        :html`<label>色: <input type="color" value=${s.strokeColor} onInput=${e=>p.onP({strokeColor:e.target.value})} /></label>`}
+      ${!isTxt&&!isSt?html`
+        <label>塗り: <input type="color" value=${s.fillColor==='transparent'?'#ffffff':s.fillColor} onInput=${e=>p.onP({fillColor:e.target.value})} /></label>
+        <label><input type="checkbox" checked=${s.fillColor==='transparent'} onChange=${e=>p.onP({fillColor:e.target.checked?'transparent':'#fff'})} /> 透明</label>
+        <label>線幅: <input type="range" min="1" max="20" value=${s.strokeWidth} onInput=${e=>p.onP({strokeWidth:parseInt(e.target.value)})} /> ${s.strokeWidth}px</label>
+      `:null}
+      ${isTxt?html`
+        <label>サイズ: <input type="number" value=${s.fontSize} min="8" max="120" onInput=${e=>p.onP({fontSize:parseInt(e.target.value)})} /></label>
+        <label><select value=${s.fontFamily} onInput=${e=>p.onP({fontFamily:e.target.value})}>
+          ${FONT_OPTIONS.map(f=>html`<option key=${f.value} value=${f.value}>${f.label}</option>`)}
+        </select></label>
+        <button class="prop-btn ${s.fontWeight==='bold'?'active':''}" onClick=${()=>p.onP({fontWeight:s.fontWeight==='bold'?'normal':'bold'})}>B</button>
+        <button class="prop-btn ${s.fontStyle==='italic'?'active':''}" onClick=${()=>p.onP({fontStyle:s.fontStyle==='italic'?'normal':'italic'})}><i>I</i></button>
+        <button class="prop-btn ${s.underline?'active':''}" onClick=${()=>p.onP({underline:!s.underline})}><u>U</u></button>
+        <button class="prop-btn ${s.linethrough?'active':''}" onClick=${()=>p.onP({linethrough:!s.linethrough})}><s>S</s></button>
+      `:null}
+      ${p.tool===TOOLS.POLYGON?html`<label>辺数: <input type="number" value=${s.polygonSides||6} min="3" max="12" style="width:45px" onInput=${e=>p.onP({polygonSides:parseInt(e.target.value)||6})} /></label>`:null}
+      ${p.tool===TOOLS.STAR?html`<label>頂点: <input type="number" value=${s.starPoints||5} min="3" max="12" style="width:45px" onInput=${e=>p.onP({starPoints:parseInt(e.target.value)||5})} /></label>`:null}
+      ${isSt?html`<label><select onInput=${e=>p.onP({stampType:e.target.value})}><option value="approved">承認済</option><option value="confidential">機密</option><option value="draft">ドラフト</option><option value="final">最終版</option><option value="reviewed">レビュー済</option></select></label>`:null}
+      <label>不透明度: <input type="range" min="0" max="100" value=${Math.round((s.opacity??1)*100)} onInput=${e=>p.onP({opacity:parseInt(e.target.value)/100})} /></label>
+    </div>`;
+  }
+
+  function Sidebar(p){
+    const[sq,setSq]=useState('');
+    const[dragI,setDragI]=useState(null);
+    if(!p.visible)return null;
+    return html`<div class="sidebar">
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab ${p.tab==='thumbs'?'active':''}" onClick=${()=>p.onTab('thumbs')}>ページ</button>
+        <button class="sidebar-tab ${p.tab==='outline'?'active':''}" onClick=${()=>p.onTab('outline')}>しおり</button>
+        <button class="sidebar-tab ${p.tab==='search'?'active':''}" onClick=${()=>p.onTab('search')}>検索</button>
+      </div>
+      <div class="sidebar-content">
+        ${p.tab==='thumbs'?html`<div class="thumb-list">${p.thumbs.map((t,i)=>html`
+          <div key=${i} class="thumb-item ${p.curPage===i+1?'active':''}" draggable="true"
+            onClick=${()=>p.onPageSel(i+1)}
+            onDragStart=${e=>{setDragI(i);e.dataTransfer.effectAllowed='move';}}
+            onDragOver=${e=>e.preventDefault()}
+            onDrop=${e=>{e.preventDefault();if(dragI!==null&&dragI!==i)p.onReorder(dragI,i);setDragI(null);}}>
+            <img src=${t.dataUrl} alt="" style=${{transform:'rotate('+(t.rotation||0)+'deg)'}} />
+            <span class="thumb-label">${i+1}</span>
+            <div class="thumb-actions">
+              <button class="thumb-act-btn" onClick=${e=>{e.stopPropagation();p.onInsert(i+1);}} title="空白挿入">+</button>
+              <button class="thumb-act-btn del" onClick=${e=>{e.stopPropagation();if(confirm('このページを削除しますか？'))p.onDelete(i);}} title="削除">×</button>
+            </div>
+          </div>
+        `)}</div>`:null}
+        ${p.tab==='outline'?html`<div>${p.outline.length>0?html`<${OutlineTree} items=${p.outline} onSel=${p.onPageSel} />`
+          :html`<p class="empty-msg">しおり情報がありません</p>`}</div>`:null}
+        ${p.tab==='search'?html`<div>
+          <form class="search-form" onSubmit=${e=>{e.preventDefault();p.onSearch(sq);}}>
+            <input class="search-input" placeholder="テキストを検索..." value=${sq} onInput=${e=>setSq(e.target.value)} />
+            <button type="submit" class="search-btn">🔍</button>
+          </form>
+          <div>${p.searchRes.map((r,i)=>html`
+            <div key=${i} class="search-result" onClick=${()=>p.onSearchSel(r)}><span class="search-pg">P.${r.page}</span><span class="search-txt">${r.text}</span></div>
+          `)}${sq&&p.searchRes.length===0?html`<p class="empty-msg">結果なし</p>`:null}</div>
+        </div>`:null}
+      </div>
+    </div>`;
+  }
+  function OutlineTree({items,onSel,level=0}){
+    return html`<ul class="outline-tree" style=${{paddingLeft:level>0?'16px':'0'}}>${items.map((it,i)=>html`
+      <li key=${i}><a class="outline-item" onClick=${()=>onSel(it.page)}>${it.title}<span class="outline-page">P.${it.page}</span></a>
+      ${it.children?.length>0?html`<${OutlineTree} items=${it.children} onSel=${onSel} level=${level+1} />`:null}</li>
+    `)}</ul>`;
+  }
+
+  function MainView(p){
+    const cRef=useRef(null), pRef=useRef(null), aRef=useRef(null), initd=useRef(false);
+    useEffect(()=>{
+      if(!p.hasDoc||!p.curPage||!pRef.current)return;
+      const doc=RL.getDoc(); if(!doc)return;
+      (async()=>{
+        try{
+          await RL.renderPage(p.curPage,p.zoom,pRef.current);
+          const d=await RL.getPageDims(p.curPage);
+          const w=d.width*p.zoom, h=d.height*p.zoom;
+          if(!initd.current&&aRef.current){AL.init(aRef.current,w,h);AL._lastZoom=p.zoom;initd.current=true;}else{AL.resize(w,h,p.zoom);}
+          AL.loadPage(p.curPage);
+        }catch(e){console.error('レンダリングエラー:',e);}
+      })();
+    },[p.curPage,p.zoom,p.hasDoc,p.total,p.docId]);
+    useEffect(()=>{AL.setTool(p.tool);},[p.tool]);
+    // TEXT_EDIT / SHAPE_EDIT モード管理
+    // キャッシュキーでページ/zoom変化時の再読み込みを制御。
+    // モード離脱時にキャッシュをリセットし、再入時に必ず初期化される。
+    // SHAPE_EDIT離脱時に未保存の図形編集があればインメモリPDFに自動保存する。
+    const textEditCacheRef=useRef(null);
+    const shapeEditCacheRef=useRef(null);
+    const editLoadIdRef=useRef(0); // 非同期レース防止用
+    const autoSaveLockRef=useRef(false); // 自動保存の重複防止ロック
+    useEffect(()=>{
+      const loadId=++editLoadIdRef.current;
+      (async()=>{
+        // --- SHAPE_EDIT離脱: 編集済みCS図形をインメモリPDFに自動保存 ---
+        if(p.tool!==TOOLS.SHAPE_EDIT&&shapeEditCacheRef.current){
+          if(AL.hasModifiedCsShapes()&&!autoSaveLockRef.current){
+            autoSaveLockRef.current=true;
+            try{
+              const csObjs=AL.getCsShapeObjects();
+              await PM.embedAnnotations(p.curPage-1,{objects:csObjs},AL._lastZoom);
+              if(editLoadIdRef.current!==loadId){autoSaveLockRef.current=false;return;}
+              const bytes=await PM.save();
+              await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);
+              // csShape/csCoverのみ除去（通常注釈はpageData/canvasに残す）
+              AL.clearCsShapes();
+              // PDF.jsを新PDFで再描画（編集済み図形が反映された状態に）
+              if(pRef.current)await RL.renderPage(p.curPage,p.zoom,pRef.current);
+              console.log('[PDF Editor] CS図形編集を自動保存しました');
+            }catch(e){
+              console.error('[PDF Editor] CS図形自動保存エラー:',e);
+              // 失敗時: 図形をクリアしない（ユーザーの編集を保持）
+            }
+            autoSaveLockRef.current=false;
+          } else {
+            AL.clearCsShapes();
+          }
+          shapeEditCacheRef.current=null;
+        }
+        // --- TEXT_EDIT離脱 ---
+        if(p.tool!==TOOLS.TEXT_EDIT&&textEditCacheRef.current){
+          AL.clearUnmodifiedPdfText();AL.clearTextEditData();
+          textEditCacheRef.current=null;
+        }
+        if(editLoadIdRef.current!==loadId)return; // レース防止
+        if(!p.hasDoc||!p.curPage)return;
+        const cacheKey=p.curPage+'_'+p.zoom+'_'+p.docId;
+        // TEXT_EDIT初期化
+        if(p.tool===TOOLS.TEXT_EDIT&&textEditCacheRef.current!==cacheKey){
+          textEditCacheRef.current=cacheKey;
+          try{
+            const items=await RL.getTextItems(p.curPage,p.zoom);
+            if(editLoadIdRef.current!==loadId)return;
+            const embeddedItems=items.map(it=>({...it,type:'embedded'}));
+            const dims=await RL.getPageDims(p.curPage);
+            const rawFT=PM.getFreeTextAnnotations(p.curPage-1);
+            const ftItems=rawFT.map(annot=>{
+              const{rect,text,fontSize,fillColor}=annot;
+              return{text,fontSize:fontSize*p.zoom,fillColor:fillColor||'#000000',
+                x:rect.x1*p.zoom,y:(dims.height-rect.y2)*p.zoom,
+                width:(rect.x2-rect.x1)*p.zoom,height:(rect.y2-rect.y1)*p.zoom,
+                type:'acrobat',_annotIndex:annot.annotIndex};
+            });
+            if(editLoadIdRef.current!==loadId)return;
+            AL.setTextEditData(embeddedItems,ftItems);
+            const rawShapes=PM.getShapeAnnotations(p.curPage-1);
+            const shapeCount=AL.addShapeAnnotations(rawShapes,dims,p.zoom);
+            const total=embeddedItems.length+ftItems.length+shapeCount;
+            if(total)p.onToast?.('テキスト編集モード: テキスト箇所をクリックして編集 ('+total+'件検出)','info');
+          }catch(e){console.error('[PDF Editor] テキスト抽出エラー:',e);}
+        }
+        // SHAPE_EDIT初期化
+        if(p.tool===TOOLS.SHAPE_EDIT&&shapeEditCacheRef.current!==cacheKey){
+          shapeEditCacheRef.current=cacheKey;
+          try{
+            const dims=await RL.getPageDims(p.curPage);
+            const csShapes=await RL.getContentStreamShapes(p.curPage);
+            if(editLoadIdRef.current!==loadId)return;
+            const csCount=AL.addContentStreamShapes(csShapes,dims,p.zoom);
+            if(csCount)p.onToast?.('図形編集モード: 図形を選択して編集 ('+csCount+'件検出)','info');
+            else p.onToast?.('図形編集モード: 編集可能な図形が見つかりません','info');
+          }catch(e){console.error('[PDF Editor] CS図形検出エラー:',e);}
+        }
+      })();
+    },[p.tool,p.curPage,p.zoom,p.hasDoc,p.docId]);
+    const onDO=e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';e.currentTarget.classList.add('drag-over');};
+    const onDL=e=>e.currentTarget.classList.remove('drag-over');
+    const onDr=e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');if(e.dataTransfer.files.length>0)p.onDrop(e.dataTransfer.files[0]);};
+    if(!p.hasDoc)return html`<div class="main-view empty" onDragOver=${onDO} onDragLeave=${onDL} onDrop=${onDr}><div class="drop-zone"><div class="drop-icon">📄</div><p>PDFファイルをドラッグ&ドロップ</p><p>または「📂」ボタンでファイルを開く</p></div></div>`;
+    return html`<div class="main-view" ref=${cRef} onDragOver=${onDO} onDragLeave=${onDL} onDrop=${onDr}><div class="canvas-wrap"><canvas ref=${pRef} class="pdf-canvas"></canvas><div ref=${aRef} class="annot-container"></div></div></div>`;
+  }
+
+  // --- Dialogs ---
+  function MergeDlg({onClose,onMerge}){
+    const[files,setFiles]=useState([]);
+    return html`<div class="dlg-overlay" onClick=${e=>e.target===e.currentTarget&&onClose()}><div class="dlg"><h3>PDFマージ</h3><div class="dlg-body">
+      <input type="file" accept=".pdf" multiple onChange=${e=>setFiles([...files,...Array.from(e.target.files)])} />
+      <div style="margin-top:12px">${files.map((f,i)=>html`<div key=${i} class="merge-item"><span>${f.name}</span><div>
+        <button onClick=${()=>{const a=[...files];const[x]=a.splice(i,1);a.splice(Math.max(0,i-1),0,x);setFiles(a);}} disabled=${i===0}>▲</button>
+        <button onClick=${()=>{const a=[...files];const[x]=a.splice(i,1);a.splice(Math.min(a.length,i+1),0,x);setFiles(a);}} disabled=${i===files.length-1}>▼</button>
+        <button onClick=${()=>setFiles(files.filter((_,j)=>j!==i))}>✕</button></div></div>`)}</div>
+    </div><div class="dlg-actions"><button onClick=${onClose}>キャンセル</button><button class="primary" disabled=${files.length<2} onClick=${async()=>{const b=[];for(const f of files)b.push(await f.arrayBuffer());onMerge(b);}}>マージ実行</button></div></div></div>`;
+  }
+  function SplitDlg({onClose,onSplit,total}){
+    const[mode,setMode]=useState('range'),[rs,setRs]=useState(1),[re,setRe]=useState(total),[sp,setSp]=useState('');
+    function exec(){
+      let r=[];
+      if(mode==='all'){for(let i=0;i<total;i++)r.push({start:i,end:i});}
+      else if(mode==='range'){r.push({start:rs-1,end:re-1});}
+      else{const pts=sp.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)).sort((a,b)=>a-b);let s=0;for(const p of pts){if(p>0&&p<=total){r.push({start:s,end:p-1});s=p;}}if(s<total)r.push({start:s,end:total-1});}
+      onSplit(r);
+    }
+    return html`<div class="dlg-overlay" onClick=${e=>e.target===e.currentTarget&&onClose()}><div class="dlg"><h3>PDF分割</h3><div class="dlg-body">
+      <div class="split-modes">
+        <label><input type="radio" name="sm" checked=${mode==='range'} onChange=${()=>setMode('range')} /> ページ範囲指定</label>
+        <label><input type="radio" name="sm" checked=${mode==='all'} onChange=${()=>setMode('all')} /> 1ページずつ</label>
+        <label><input type="radio" name="sm" checked=${mode==='points'} onChange=${()=>setMode('points')} /> 分割ポイント</label>
+      </div>
+      ${mode==='range'?html`<div style="display:flex;gap:12px;margin-top:12px"><label>開始: <input type="number" min="1" max=${total} value=${rs} onInput=${e=>setRs(parseInt(e.target.value))} /></label><label>終了: <input type="number" min="1" max=${total} value=${re} onInput=${e=>setRe(parseInt(e.target.value))} /></label></div>`:null}
+      ${mode==='points'?html`<div style="margin-top:12px"><label>分割ポイント(カンマ区切り): <input type="text" placeholder="例: 3, 7, 12" value=${sp} onInput=${e=>setSp(e.target.value)} /></label><small>全${total}ページ</small></div>`:null}
+    </div><div class="dlg-actions"><button onClick=${onClose}>キャンセル</button><button class="primary" onClick=${exec}>分割実行</button></div></div></div>`;
+  }
+  function WMDlg({onClose,onApply}){
+    const[text,setText]=useState('CONFIDENTIAL'),[op,setOp]=useState(20),[rot,setRot]=useState(-45),[fs,setFs]=useState(48);
+    return html`<div class="dlg-overlay" onClick=${e=>e.target===e.currentTarget&&onClose()}><div class="dlg"><h3>ウォーターマーク</h3><div class="dlg-body">
+      <label>テキスト: <input type="text" value=${text} onInput=${e=>setText(e.target.value)} /></label>
+      <label>サイズ: <input type="number" min="12" max="120" value=${fs} onInput=${e=>setFs(parseInt(e.target.value))} /></label>
+      <label>透明度: <input type="range" min="5" max="80" value=${op} onInput=${e=>setOp(parseInt(e.target.value))} /> ${op}%</label>
+      <label>回転: <input type="number" min="-180" max="180" value=${rot} onInput=${e=>setRot(parseInt(e.target.value))} />°</label>
+    </div><div class="dlg-actions"><button onClick=${onClose}>キャンセル</button><button class="primary" onClick=${()=>onApply({text,opacity:op/100,rotation:rot,fontSize:fs})}>適用</button></div></div></div>`;
+  }
+  function PNDlg({onClose,onApply}){
+    const[pos,setPos]=useState('bottom-center'),[fmt,setFmt]=useState('{n}'),[fs,setFs]=useState(12),[sf,setSf]=useState(1);
+    return html`<div class="dlg-overlay" onClick=${e=>e.target===e.currentTarget&&onClose()}><div class="dlg"><h3>ページ番号</h3><div class="dlg-body">
+      <label>位置: <select value=${pos} onChange=${e=>setPos(e.target.value)}><option value="top-left">左上</option><option value="top-center">中央上</option><option value="top-right">右上</option><option value="bottom-left">左下</option><option value="bottom-center">中央下</option><option value="bottom-right">右下</option></select></label>
+      <label>フォーマット: <input type="text" value=${fmt} onInput=${e=>setFmt(e.target.value)} /><small>{n}=番号 {total}=総数</small></label>
+      <label>サイズ: <input type="number" min="8" max="36" value=${fs} onInput=${e=>setFs(parseInt(e.target.value))} /></label>
+      <label>開始: <input type="number" min="0" value=${sf} onInput=${e=>setSf(parseInt(e.target.value))} /></label>
+    </div><div class="dlg-actions"><button onClick=${onClose}>キャンセル</button><button class="primary" onClick=${()=>onApply({position:pos,format:fmt,fontSize:fs,startFrom:sf})}>適用</button></div></div></div>`;
+  }
+  function HFDlg({onClose,onApply}){
+    const[hd,setHd]=useState(''),[ft,setFt]=useState(''),[fs,setFs]=useState(10),[mg,setMg]=useState(30);
+    return html`<div class="dlg-overlay" onClick=${e=>e.target===e.currentTarget&&onClose()}><div class="dlg"><h3>ヘッダー/フッター</h3><div class="dlg-body">
+      <label>ヘッダー: <input type="text" value=${hd} onInput=${e=>setHd(e.target.value)} /></label>
+      <label>フッター: <input type="text" value=${ft} onInput=${e=>setFt(e.target.value)} /></label>
+      <label>サイズ: <input type="number" min="8" max="24" value=${fs} onInput=${e=>setFs(parseInt(e.target.value))} /></label>
+      <label>マージン: <input type="number" min="10" max="80" value=${mg} onInput=${e=>setMg(parseInt(e.target.value))} /></label>
+    </div><div class="dlg-actions"><button onClick=${onClose}>キャンセル</button><button class="primary" onClick=${()=>onApply({header:hd,footer:ft,fontSize:fs,margin:mg})}>適用</button></div></div></div>`;
+  }
+  function PwDlg({onClose,onSubmit}){
+    const[pw,setPw]=useState(''),[err,setErr]=useState('');
+    const submit=e=>{if(e)e.preventDefault();if(!pw){setErr('パスワードを入力してください');return;}setErr('');onSubmit(pw);};
+    return html`<div class="dlg-overlay"><div class="dlg"><h3>パスワード入力</h3><div class="dlg-body"><p>このPDFはパスワードで保護されています。</p>
+      <form onSubmit=${submit}><input type="password" style="width:100%;padding:8px;font-size:16px;border:1px solid var(--border-color);border-radius:4px;" placeholder="パスワード" value=${pw} onInput=${e=>setPw(e.target.value)} /></form>
+      ${err?html`<p class="error-text">${err}</p>`:null}
+    </div><div class="dlg-actions"><button onClick=${onClose}>キャンセル</button><button class="primary" onClick=${submit}>開く</button></div></div></div>`;
+  }
+  function HelpDlg({onClose}){
+    return html`<div class="dlg-overlay" onClick=${e=>e.target===e.currentTarget&&onClose()}><div class="dlg"><h3>キーボードショートカット</h3><div class="dlg-body">
+      <table class="shortcut-table"><thead><tr><th>キー</th><th>機能</th></tr></thead><tbody>
+      ${SHORTCUT_LIST.map(([k,d])=>html`<tr><td><kbd>${k}</kbd></td><td>${d}</td></tr>`)}
+      </tbody></table></div><div class="dlg-actions"><button class="primary" onClick=${onClose}>閉じる</button></div></div></div>`;
+  }
+  function Toast({msgs}){
+    if(!msgs||!msgs.length)return null;
+    return html`<div class="toast-wrap">${msgs.map((m,i)=>html`<div key=${i} class="toast toast-${m.type||'info'}">${m.text}</div>`)}</div>`;
+  }
+
+  // ===================== APP =====================
+  function App(){
+    const[hasDoc,setHasDoc]=useState(false),[fName,setFName]=useState(''),[total,setTotal]=useState(0),[curPage,setCurPage]=useState(1),[docId,setDocId]=useState(0);
+    const[zoom,setZoom]=useState(1),[dark,setDark]=useState(darkMode);
+    const[sideVis]=useState(true),[sideTab,setSideTab]=useState('thumbs');
+    const[tool,setTool]=useState(TOOLS.SELECT),[sp,setSp]=useState({...DEFAULT_PROPS});
+    const[canUndo,setCanUndo]=useState(false),[canRedo,setCanRedo]=useState(false);
+    const[thumbs,setThumbs]=useState([]),[outline,setOutline]=useState([]),[searchRes,setSearchRes]=useState([]);
+    const[dlg,setDlg]=useState(null),[toasts,setToasts]=useState([]);
+    const pendingPdf=useRef(null);
+
+    const toast=useCallback((text,type='info')=>{
+      const m={text,type,id:Date.now()};
+      setToasts(p=>[...p,m]);
+      setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==m.id)),3000);
+    },[]);
+
+    useEffect(()=>{HM.setOnChange(({canUndo:u,canRedo:r})=>{setCanUndo(u);setCanRedo(r);});},[]);
+    useEffect(()=>{AL.onModified(()=>{const j=AL.toJSON();HM.push({type:'annotation',pageNumber:curPage,data:j,timestamp:Date.now()});});},[curPage]);
+    useEffect(()=>{AL.onSelection(e=>{const obj=e.selected?.[0];if(!obj)return;const t=(obj.type||'').toLowerCase();if(['textbox','i-text','itext','text'].includes(t)){setSp(prev=>({...prev,fontSize:Math.round(obj.fontSize||16),fontFamily:obj._pdfFontKey||'Noto Sans JP',fontWeight:obj.fontWeight||'normal',fontStyle:obj.fontStyle||'normal',textColor:obj.fill||'#000',underline:!!obj.underline,linethrough:!!obj.linethrough,opacity:obj.opacity??1}));}});},[]);
+
+    // Keyboard
+    useEffect(()=>{
+      function onKey(e){
+        const tag=e.target.tagName;if(tag==='INPUT'||tag==='TEXTAREA'||e.target.isContentEditable)return;
+        if(e.ctrlKey||e.metaKey){switch(e.key.toLowerCase()){case'z':e.preventDefault();if(e.shiftKey)doRedo();else doUndo();return;case'y':e.preventDefault();doRedo();return;case's':e.preventDefault();doSave();return;}}
+        if(e.key==='Delete'||e.key==='Backspace'){AL.deleteSelected();return;}
+        if(e.key==='Escape'){const c=AL.getCanvas();if(c)c.discardActiveObject().renderAll();return;}
+        if(e.key==='+'||e.key==='='){setZoom(z=>Math.min(ZOOM_MAX,z+ZOOM_STEP));return;}
+        if(e.key==='-'){setZoom(z=>Math.max(ZOOM_MIN,z-ZOOM_STEP));return;}
+        if(e.key==='?'){setDlg('help');return;}
+        const t=SHORTCUTS[e.key.toLowerCase()];if(t)setTool(t);
+      }
+      document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey);
+    },[]);
+    // Wheel zoom
+    useEffect(()=>{
+      function onW(e){if(e.ctrlKey){e.preventDefault();setZoom(z=>Math.max(ZOOM_MIN,Math.min(ZOOM_MAX,z+(e.deltaY>0?-ZOOM_STEP:ZOOM_STEP))));}}
+      document.addEventListener('wheel',onW,{passive:false});return()=>document.removeEventListener('wheel',onW);
+    },[]);
+
+    async function loadPDF(file){
+      if(!isPDF(file)){toast('有効なPDFファイルを選択してください','error');return;}
+      try{const data=await readFileAsArrayBuffer(file);await loadFromData(data,file.name);}
+      catch(e){console.error('[PDF Editor] loadPDF error:',e);if(e.message?.includes('password')){pendingPdf.current={data:await readFileAsArrayBuffer(file),name:file.name};setDlg('pw');}else{toast('読み込み失敗: '+e.message,'error');}}
+    }
+    async function loadFromData(data,name,pw){
+      try{
+        const doc=await RL.loadDocument(data,pw);await PM.load(data);
+        setHasDoc(true);setFName(name||'document.pdf');setTotal(doc.numPages);setCurPage(1);setDocId(d=>d+1);HM.clear();
+        toast(name+' を読み込みました ('+doc.numPages+'ページ)','success');
+        genThumbs(doc.numPages);const ol=await RL.getOutline();setOutline(ol);
+      }catch(e){console.error('[PDF Editor] loadFromData error:',e);if(e.message?.includes('password')||e.name==='PasswordException'){pendingPdf.current={data,name};setDlg('pw');}else{toast('読み込み失敗: '+e.message,'error');}}
+    }
+    async function genThumbs(n){const t=[];for(let i=1;i<=n;i++){try{const d=await RL.genThumb(i,150);t.push({pageNumber:i,dataUrl:d,rotation:0});}catch(e){t.push({pageNumber:i,dataUrl:'',rotation:0});}}setThumbs(t);}
+    function openFile(){const i=document.createElement('input');i.type='file';i.accept='.pdf';i.onchange=e=>{if(e.target.files[0])loadPDF(e.target.files[0]);};i.click();}
+    function onDrop(file){if(isPDF(file))loadPDF(file);else if(isImage(file))readFileAsDataURL(file).then(d=>AL.addImage(d));}
+
+    async function doSave(){
+      if(!hasDoc)return;
+      try{
+        toast('PDF出力中...','info');
+        const all=AL.getAllAnnotations();
+        // 編集済みFreeText注釈を削除（逆順でインデックスずれ防止）
+        for(const[pg,d]of all){
+          if(!d?.objects)continue;
+          console.log('[PDF Editor] page '+pg+' objects:', d.objects.map(o=>({type:o.type,ct:o.customType,text:(o.text||'').substring(0,20),orig:(o._originalText||'').substring(0,20),mod:o._isModified,ai:o._annotIndex})));
+          const toDelete=d.objects
+            .filter(o=>(o.customType==='freeTextAnnot'&&o._annotIndex!=null&&((o.text||'')!==(o._originalText||'')||o._isModified))||(o.customType==='shapeAnnot'&&o._annotIndex!=null&&o._isModified))
+            .map(o=>({pageIdx:pg-1,annotIndex:o._annotIndex,text:o.text,origText:o._originalText,customType:o.customType}))
+            .sort((a,b)=>b.annotIndex-a.annotIndex);
+          console.log('[PDF Editor] 注釈削除対象:',toDelete);
+          for(const{pageIdx,annotIndex}of toDelete)PM.removeFreeTextAnnotation(pageIdx,annotIndex);
+        }
+        for(const[pg,d]of all)await PM.embedAnnotations(pg-1,d,zoom);
+        const bytes=await PM.save();downloadUint8(bytes,fName.replace('.pdf','_edited.pdf'));
+        // 保存後、PDF.jsを再読み込みしてPM/RLを同期（白矩形・図形編集を反映）
+        try{
+          await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);
+          AL.resetPages(); // 保存後は全ページ注釈データをクリア（PDFに焼き込み済み）
+          HM.clear(); // 保存後は履歴をリセット（旧状態へのundoを防止）
+          setDocId(d=>d+1); // 再描画トリガー
+        }catch(e){console.warn('[PDF Editor] 保存後の再読み込みエラー:',e);}
+        toast('保存しました','success');
+      }catch(e){console.error('[PDF Editor] 保存エラー:',e);toast('保存失敗: '+e.message,'error');}
+    }
+    const CUSTOM_KEYS=['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough'];
+    function restoreCustomProps(c,jsonData){c.getObjects().forEach((obj,i)=>{const src=jsonData.objects&&jsonData.objects[i];if(src){CUSTOM_KEYS.forEach(k=>{if(src[k]!==undefined)obj[k]=src[k];});}});}
+    function doUndo(){const e=HM.undo();if(e?.type==='annotation'){const c=AL.getCanvas();if(c&&e.data)c.loadFromJSON(e.data).then(()=>{restoreCustomProps(c,e.data);c.renderAll();});}}
+    function doRedo(){const e=HM.redo();if(e?.type==='annotation'){const c=AL.getCanvas();if(c&&e.data)c.loadFromJSON(e.data).then(()=>{restoreCustomProps(c,e.data);c.renderAll();});}}
+
+    function onPage(p){if(p>=1&&p<=total)setCurPage(p);}
+    function rotL(){if(!hasDoc)return;PM.rotatePage(curPage-1,-90);toast('左に回転');genThumbs(total);}
+    function rotR(){if(!hasDoc)return;PM.rotatePage(curPage-1,90);toast('右に回転');genThumbs(total);}
+    function onReorder(f,t){PM.movePage(f,t);const a=[...thumbs];const[x]=a.splice(f,1);a.splice(t,0,x);setThumbs(a);toast('ページ移動');}
+    function onDelPage(i){PM.deletePage(i);const n=total-1;setTotal(n);if(curPage>n)setCurPage(n);genThumbs(n);toast('ページ削除');}
+    function onInsert(i){PM.insertBlankPage(i);const n=total+1;setTotal(n);genThumbs(n);toast('空白ページ挿入');}
+    async function onSearch(q){if(!hasDoc)return;const r=await RL.searchText(q);setSearchRes(r);if(r.length)toast(r.length+'件');}
+    async function onMerge(bufs){try{toast('マージ中...');const m=await PM.merge(bufs);downloadUint8(m,'merged.pdf');setDlg(null);toast('マージ完了','success');}catch(e){toast('マージ失敗: '+e.message,'error');}}
+    async function onSplit(ranges){try{toast('分割中...');const res=await PM.split(ranges);for(let i=0;i<res.length;i++)downloadUint8(res[i],fName.replace('.pdf','_part'+(i+1)+'.pdf'));setDlg(null);toast(res.length+'ファイルに分割','success');}catch(e){toast('分割失敗: '+e.message,'error');}}
+    async function onWM(opts){try{await PM.addWatermark(opts.text,opts);setDlg(null);toast('透かし追加','success');}catch(e){toast('失敗: '+e.message,'error');}}
+    async function onPN(opts){try{await PM.addPageNumbers(opts);setDlg(null);toast('ページ番号追加','success');}catch(e){toast('失敗: '+e.message,'error');}}
+    async function onHF(opts){try{await PM.addHeaderFooter(opts);setDlg(null);toast('ヘッダー/フッター追加','success');}catch(e){toast('失敗: '+e.message,'error');}}
+    async function onPw(pw){if(!pendingPdf.current)return;try{await loadFromData(pendingPdf.current.data,pendingPdf.current.name,pw);setDlg(null);pendingPdf.current=null;}catch(e){toast('パスワードが正しくありません','error');}}
+    function toggleDark(){darkMode=!darkMode;localStorage.setItem('pdf-dark',String(darkMode));applyTheme();setDark(darkMode);}
+    function onPropsChange(c){const n={...sp,...c};setSp(n);AL.setProps(n);}
+
+    useEffect(()=>{if(tool===TOOLS.IMAGE){const i=document.createElement('input');i.type='file';i.accept='image/*';i.onchange=async e=>{if(e.target.files[0]){const d=await readFileAsDataURL(e.target.files[0]);AL.addImage(d);}setTool(TOOLS.SELECT);};i.click();}},[tool]);
+
+    const showProps=tool!==TOOLS.SELECT&&tool!==TOOLS.PAN;
+
+    return html`
+      <div class="app-container">
+        <${Toolbar} activeTool=${tool} onToolChange=${setTool} canUndo=${canUndo} canRedo=${canRedo} onUndo=${doUndo} onRedo=${doRedo}
+          zoom=${zoom} onZoom=${setZoom} curPage=${curPage} total=${total} onPage=${onPage}
+          onOpen=${openFile} onSave=${doSave} onRotL=${rotL} onRotR=${rotR}
+          onMerge=${()=>setDlg('merge')} onSplit=${()=>hasDoc&&setDlg('split')}
+          onWM=${()=>hasDoc&&setDlg('wm')} onPN=${()=>hasDoc&&setDlg('pn')} onHF=${()=>hasDoc&&setDlg('hf')}
+          dark=${dark} onDark=${toggleDark} onHelp=${()=>setDlg('help')} />
+        ${showProps?html`<${PropsBar} sp=${sp} onP=${onPropsChange} tool=${tool} />`:null}
+        <div class="app-body">
+          <${Sidebar} visible=${sideVis} tab=${sideTab} onTab=${setSideTab}
+            thumbs=${thumbs} curPage=${curPage} onPageSel=${onPage}
+            onReorder=${onReorder} onDelete=${onDelPage} onInsert=${onInsert}
+            outline=${outline} searchRes=${searchRes} onSearch=${onSearch} onSearchSel=${r=>onPage(r.page)} />
+          <${MainView} hasDoc=${hasDoc} curPage=${curPage} zoom=${zoom} total=${total} tool=${tool} docId=${docId} onDrop=${onDrop} onToast=${toast} />
+        </div>
+        <${Toast} msgs=${toasts} />
+        ${dlg==='merge'?html`<${MergeDlg} onClose=${()=>setDlg(null)} onMerge=${onMerge} />`:null}
+        ${dlg==='split'?html`<${SplitDlg} onClose=${()=>setDlg(null)} onSplit=${onSplit} total=${total} />`:null}
+        ${dlg==='wm'?html`<${WMDlg} onClose=${()=>setDlg(null)} onApply=${onWM} />`:null}
+        ${dlg==='pn'?html`<${PNDlg} onClose=${()=>setDlg(null)} onApply=${onPN} />`:null}
+        ${dlg==='hf'?html`<${HFDlg} onClose=${()=>setDlg(null)} onApply=${onHF} />`:null}
+        ${dlg==='pw'?html`<${PwDlg} onClose=${()=>{setDlg(null);pendingPdf.current=null;}} onSubmit=${onPw} />`:null}
+        ${dlg==='help'?html`<${HelpDlg} onClose=${()=>setDlg(null)} />`:null}
+      </div>`;
+  }
+
+  // --- Wait for PDF.js to load, then boot ---
+  function boot(){
+    if(window.__pdfjsReady){
+      preactRender(html`<${App} />`, document.getElementById('app'));
+    } else {
+      setTimeout(boot, 100);
+    }
+  }
+  // Start polling after DOM ready
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',boot);}else{boot();}
+
+})();
+</script>
+</body>
+</html>
