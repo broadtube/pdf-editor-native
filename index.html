@@ -585,6 +585,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     let drawing=false, drawStart=null, tempShape=null;
     let _suppressModEvents=false; // undo/redo中のイベント抑制フラグ
     const pageData=new Map();
+    const _deletedCsShapes=[]; // 削除されたcsShapeの_csOriginalを追跡
     let curPage=0;
 
     function isShapeTool(t){ return[TOOLS.RECT,TOOLS.CIRCLE,TOOLS.ELLIPSE,TOOLS.TRIANGLE,TOOLS.DIAMOND,TOOLS.LINE,TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW,TOOLS.POLYGON,TOOLS.STAR,TOOLS.CLOUD,TOOLS.CLOUD_CALLOUT,TOOLS.CALLOUT,TOOLS.CROSS,TOOLS.HEART,TOOLS.BRACE].includes(t); }
@@ -713,7 +714,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         const ce=document.createElement('canvas'); ce.id='annot-canvas'; el.appendChild(ce);
         canvas=new fabric.Canvas(ce,{width:w,height:h,selection:true,preserveObjectStacking:true});
         canvas.__alRef=this; // TEXT_EDIT用にALへの参照を保持
-        canvas.on('object:modified',(e)=>{if(_suppressModEvents)return;if(e.target&&(e.target.customType==='shapeAnnot'||e.target.customType==='csShape'))e.target._isModified=true;onMod?.();}); canvas.on('object:added',()=>{if(!_suppressModEvents)onMod?.();}); canvas.on('object:removed',()=>{if(!_suppressModEvents)onMod?.();});
+        canvas.on('object:modified',(e)=>{if(_suppressModEvents)return;if(e.target&&(e.target.customType==='shapeAnnot'||e.target.customType==='csShape'))e.target._isModified=true;onMod?.();}); canvas.on('object:added',()=>{if(!_suppressModEvents)onMod?.();}); canvas.on('object:removed',(e)=>{if(!_suppressModEvents){if(e.target?.customType==='csShape'&&e.target._csOriginal){_deletedCsShapes.push(e.target._csOriginal);}onMod?.();}});
         canvas.on('selection:created',e=>onSel?.(e)); canvas.on('selection:updated',e=>onSel?.(e));
         canvas.on('mouse:down',onMouseDown); canvas.on('mouse:move',onMouseMove); canvas.on('mouse:up',onMouseUp);
       },
@@ -999,12 +1000,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       hasModifiedCsShapes(){
         if(!canvas)return false;
+        if(_deletedCsShapes.length>0)return true;
         return canvas.getObjects().some(o=>o.customType==='csShape'&&o._isModified);
       },
       getCsShapeObjects(){
         if(!canvas)return[];
         return canvas.getObjects().filter(o=>o.customType==='csShape');
       },
+      getDeletedCsOriginals(){return _deletedCsShapes.splice(0);},
       async addImage(dataUrl){ if(!canvas)return;const img=await fabric.Image.fromURL(dataUrl);const mx=400;if(img.width>mx||img.height>mx){const s=mx/Math.max(img.width,img.height);img.scaleToWidth(img.width*s);}canvas.add(img);canvas.setActiveObject(img);canvas.renderAll(); },
       deleteSelected(){ if(!canvas)return; const a=canvas.getActiveObjects(); a.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.renderAll(); },
       _lastZoom:1,
@@ -1163,6 +1166,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                   page.drawRectangle({x:bx-margin,y:csPH-(by+bh)-margin,width:bw+margin*2,height:bh+margin*2,color:lib().rgb(1,1,1),borderWidth:0});
                 }
               }
+              // 削除されたcsShapeは白カバーのみ（再描画不要）
+              if((obj.width||0)===0&&(obj.height||0)===0)continue;
               // csShape専用描画: Fabric座標→PDF座標
               const csStroke=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined;
               const csFill=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;
@@ -1204,6 +1209,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                 // PDF operatorsでパスを構築（ベジェ曲線をそのまま保持）
                 const PDFLib=lib();
                 const ops=[PDFLib.pushGraphicsState()];
+                if(csOp<1){const gsKey=page.maybeEmbedGraphicsState({opacity:csOp,borderOpacity:csOp});if(gsKey)ops.push(PDFLib.setGraphicsState(gsKey));}
                 if(csFill)ops.push(PDFLib.setFillingColor(csFill));
                 if(csStroke)ops.push(PDFLib.setStrokingColor(csStroke));
                 ops.push(PDFLib.setLineWidth(csLW));
@@ -1262,18 +1268,20 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             switch(t){
               case'rect':page.drawRectangle({x:S(obj.left),y:flipY(obj.top,obj.height*(obj.scaleY||1)),width:S(obj.width*(obj.scaleX||1)),height:S(obj.height*(obj.scaleY||1)),borderColor:obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;
               case'circle':case'ellipse':{const rx=S((obj.rx||obj.radius||0)*(obj.scaleX||1)),ry=S((obj.ry||obj.radius||0)*(obj.scaleY||1));page.drawEllipse({x:S(obj.left)+rx,y:flipY(obj.top+(obj.ry||obj.radius||0)*(obj.scaleY||1)),xScale:rx,yScale:ry,borderColor:obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;}
-              case'triangle':{const w=S((obj.width||0)*(obj.scaleX||1)),h=S((obj.height||0)*(obj.scaleY||1)),bx=S(obj.left||0),by=flipY(obj.top||0,obj.height*(obj.scaleY||1));const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);page.drawLine({start:{x:bx+w/2,y:by+h},end:{x:bx,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx,y:by},end:{x:bx+w,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx+w,y:by},end:{x:bx+w/2,y:by+h},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
-              case'line':{const lsx=obj.scaleX||1,lsy=obj.scaleY||1;const lMinX=Math.min(obj.x1||0,obj.x2||0),lMinY=Math.min(obj.y1||0,obj.y2||0);const lcx1=(obj.left||0)+((obj.x1||0)-lMinX)*lsx,lcy1=(obj.top||0)+((obj.y1||0)-lMinY)*lsy;const lcx2=(obj.left||0)+((obj.x2||0)-lMinX)*lsx,lcy2=(obj.top||0)+((obj.y2||0)-lMinY)*lsy;page.drawLine({start:{x:S(lcx1),y:flipY(lcy1)},end:{x:S(lcx2),y:flipY(lcy2)},color:obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0),thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
+              case'triangle':{const w=S((obj.width||0)*(obj.scaleX||1)),h=S((obj.height||0)*(obj.scaleY||1)),bx=S(obj.left||0),by=flipY(obj.top||0,obj.height*(obj.scaleY||1));const col=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);page.drawLine({start:{x:bx+w/2,y:by+h},end:{x:bx,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx,y:by},end:{x:bx+w,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx+w,y:by},end:{x:bx+w/2,y:by+h},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
+              case'line':{const lsx=obj.scaleX||1,lsy=obj.scaleY||1;const lMinX=Math.min(obj.x1||0,obj.x2||0),lMinY=Math.min(obj.y1||0,obj.y2||0);const lcx1=(obj.left||0)+((obj.x1||0)-lMinX)*lsx,lcy1=(obj.top||0)+((obj.y1||0)-lMinY)*lsy;const lcx2=(obj.left||0)+((obj.x2||0)-lMinX)*lsx,lcy2=(obj.top||0)+((obj.y2||0)-lMinY)*lsy;page.drawLine({start:{x:S(lcx1),y:flipY(lcy1)},end:{x:S(lcx2),y:flipY(lcy2)},color:obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0),thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
               case'path':{
                 if(!obj.path)break;
                 const ox=obj.left||0,oy=obj.top||0;const ssx=obj.scaleX||1,ssy=obj.scaleY||1;
-                const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);
+                const col=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined;
                 const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;
                 const th=S(obj.strokeWidth||2);
                 // PDF座標変換: Fabric path座標→PDF座標
                 function annotPt(px,py){return{x:S(ox+px*ssx),y:flipY(oy+py*ssy)};}
                 const PDFLib=lib();
                 const ops=[PDFLib.pushGraphicsState()];
+                const aOp=obj.opacity??1;
+                if(aOp<1){const gsKey=page.maybeEmbedGraphicsState({opacity:aOp,borderOpacity:aOp});if(gsKey)ops.push(PDFLib.setGraphicsState(gsKey));}
                 if(fc)ops.push(PDFLib.setFillingColor(fc));
                 if(col)ops.push(PDFLib.setStrokingColor(col));
                 ops.push(PDFLib.setLineWidth(th));
@@ -1295,23 +1303,23 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                 if(hasPath){
                   if(fc&&col)ops.push(PDFLib.fillAndStroke());
                   else if(fc)ops.push(PDFLib.fill());
-                  else ops.push(PDFLib.stroke());
+                  else if(col)ops.push(PDFLib.stroke());
                 }
                 ops.push(PDFLib.popGraphicsState());
                 page.pushOperators(...ops);
                 break;
               }
               case'textbox':case'i-text':case'itext':case'text':{const dFs=(obj.fontSize||16)*(obj.scaleY||1);const fs=S(dFs);const txtFont=await resolveFont(obj.fontFamily,obj.text,obj._pdfFontKey);const tbColor=obj.fill?lib().rgb(...hexToRgb(obj.fill)):lib().rgb(0,0,0);const tLines=(obj.text||'').split('\n');let tOff=0;for(const tl of tLines){if(tl.trim()){const tlY=flipY(obj.top+tOff,dFs);page.drawText(tl,{x:S(obj.left),y:tlY,size:fs,font:txtFont,color:tbColor,opacity:obj.opacity??1});if(obj.underline){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY-fs*0.15},end:{x:S(obj.left)+tw,y:tlY-fs*0.15},color:tbColor,thickness:fs*0.05});}if(obj.linethrough){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY+fs*0.35},end:{x:S(obj.left)+tw,y:tlY+fs*0.35},color:tbColor,thickness:fs*0.05});}}tOff+=dFs*1.2;}break;}
-              case'polygon':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;
+              case'polygon':{if(obj.points&&obj.points.length>=2){const col=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined;const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;
                 if(fc&&obj.points.length>=3){
-                  const PDFLib=lib();const ops=[PDFLib.pushGraphicsState()];ops.push(PDFLib.setFillingColor(fc));if(col)ops.push(PDFLib.setStrokingColor(col));ops.push(PDFLib.setLineWidth(S(obj.strokeWidth||1)));
+                  const PDFLib=lib();const ops=[PDFLib.pushGraphicsState()];const pgOp=obj.opacity??1;if(pgOp<1){const gsKey=page.maybeEmbedGraphicsState({opacity:pgOp,borderOpacity:pgOp});if(gsKey)ops.push(PDFLib.setGraphicsState(gsKey));}ops.push(PDFLib.setFillingColor(fc));if(col)ops.push(PDFLib.setStrokingColor(col));ops.push(PDFLib.setLineWidth(S(obj.strokeWidth||1)));
                   const p0={x:ox+S(obj.points[0].x*sx),y:flipY(oy+obj.points[0].y*sy)};ops.push(PDFLib.moveTo(p0.x,p0.y));
                   for(let pi=1;pi<obj.points.length;pi++){const pt={x:ox+S(obj.points[pi].x*sx),y:flipY(oy+obj.points[pi].y*sy)};ops.push(PDFLib.lineTo(pt.x,pt.y));}
                   ops.push(PDFLib.closePath());ops.push(col?PDFLib.fillAndStroke():PDFLib.fill());ops.push(PDFLib.popGraphicsState());page.pushOperators(...ops);
                 } else {
-                  for(let pi=0;pi<obj.points.length;pi++){const cur=obj.points[pi],nxt=obj.points[(pi+1)%obj.points.length];page.drawLine({start:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},end:{x:ox+S(nxt.x*sx),y:flipY(oy+nxt.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}
+                  for(let pi=0;pi<obj.points.length;pi++){const cur=obj.points[pi],nxt=obj.points[(pi+1)%obj.points.length];page.drawLine({start:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},end:{x:ox+S(nxt.x*sx),y:flipY(oy+nxt.y*sy)},color:col||lib().rgb(0,0,0),thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}
                 }}break;}
-              case'polyline':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=1;pi<obj.points.length;pi++){const prev=obj.points[pi-1],cur=obj.points[pi];page.drawLine({start:{x:ox+S(prev.x*sx),y:flipY(oy+prev.y*sy)},end:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
+              case'polyline':{if(obj.points&&obj.points.length>=2){const col=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=1;pi<obj.points.length;pi++){const prev=obj.points[pi-1],cur=obj.points[pi];page.drawLine({start:{x:ox+S(prev.x*sx),y:flipY(oy+prev.y*sy)},end:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
               case'group':{const groupChildren=obj.objects?[...obj.objects]:[];for(const ch of groupChildren){const adj={...ch,left:(ch.left||0)*(obj.scaleX||1)+(obj.left||0),top:(ch.top||0)*(obj.scaleY||1)+(obj.top||0),scaleX:(ch.scaleX||1)*(obj.scaleX||1),scaleY:(ch.scaleY||1)*(obj.scaleY||1),strokeWidth:ch.strokeWidth||obj.strokeWidth||1,stroke:ch.stroke||obj.stroke,fill:ch.fill||obj.fill,opacity:ch.opacity??obj.opacity??1};annotJSON.objects.push(adj);}break;}
               default:console.warn('[PDF Editor] Unknown annotation type: "'+obj.type+'" — skipped');break;
             }
@@ -1696,6 +1704,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                 j.customType=o.customType;j._csOriginal=o._csOriginal;j._isModified=o._isModified;
                 return j;
               });
+              // 削除されたcsShapeの元図形を白矩形で覆う（ダミーオブジェクト）
+              for(const orig of AL.getDeletedCsOriginals()){
+                csObjs.push({type:'rect',customType:'csShape',_csOriginal:orig,_isModified:true,left:0,top:0,width:0,height:0,stroke:'transparent',fill:'transparent',strokeWidth:0,opacity:0});
+              }
               await PM.embedAnnotations(p.curPage-1,{objects:csObjs},AL._lastZoom);
               if(editLoadIdRef.current!==loadId){autoSaveLockRef.current=false;return;}
               const bytes=await PM.save();
