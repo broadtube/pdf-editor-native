@@ -1266,33 +1266,39 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
               case'line':{const lsx=obj.scaleX||1,lsy=obj.scaleY||1;const lMinX=Math.min(obj.x1||0,obj.x2||0),lMinY=Math.min(obj.y1||0,obj.y2||0);const lcx1=(obj.left||0)+((obj.x1||0)-lMinX)*lsx,lcy1=(obj.top||0)+((obj.y1||0)-lMinY)*lsy;const lcx2=(obj.left||0)+((obj.x2||0)-lMinX)*lsx,lcy2=(obj.top||0)+((obj.y2||0)-lMinY)*lsy;page.drawLine({start:{x:S(lcx1),y:flipY(lcy1)},end:{x:S(lcx2),y:flipY(lcy2)},color:obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0),thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
               case'path':{
                 if(!obj.path)break;
-                const ox=S(obj.left||0),oy=obj.top||0;const ssx=obj.scaleX||1,ssy=obj.scaleY||1;
+                const ox=obj.left||0,oy=obj.top||0;const ssx=obj.scaleX||1,ssy=obj.scaleY||1;
                 const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);
                 const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;
                 const th=S(obj.strokeWidth||2);
-                // Linearize bezier curves for PDF
-                function lerp(a,b,t){return a+(b-a)*t;}
-                function bezierQ(p0,cp,p1,steps){const pts=[];for(let i=1;i<=steps;i++){const t=i/steps;const x=lerp(lerp(p0.x,cp.x,t),lerp(cp.x,p1.x,t),t);const y=lerp(lerp(p0.y,cp.y,t),lerp(cp.y,p1.y,t),t);pts.push({x,y});}return pts;}
-                function bezierC(p0,c1,c2,p1,steps){const pts=[];for(let i=1;i<=steps;i++){const t=i/steps;const x=(1-t)**3*p0.x+3*(1-t)**2*t*c1.x+3*(1-t)*t**2*c2.x+t**3*p1.x;const y=(1-t)**3*p0.y+3*(1-t)**2*t*c1.y+3*(1-t)*t**2*c2.y+t**3*p1.y;pts.push({x,y});}return pts;}
-                // Build linearized point list
-                const allPts=[];let cx=0,cy=0;
+                // PDF座標変換: Fabric path座標→PDF座標
+                function annotPt(px,py){return{x:S(ox+px*ssx),y:flipY(oy+py*ssy)};}
+                const PDFLib=lib();
+                const ops=[PDFLib.pushGraphicsState()];
+                if(fc)ops.push(PDFLib.setFillingColor(fc));
+                if(col)ops.push(PDFLib.setStrokingColor(col));
+                ops.push(PDFLib.setLineWidth(th));
+                let hasPath=false;
                 for(const seg of obj.path){
-                  if(seg[0]==='M'){cx=seg[1]*ssx;cy=seg[2]*ssy;allPts.push({x:cx,y:cy});}
-                  else if(seg[0]==='L'){cx=seg[1]*ssx;cy=seg[2]*ssy;allPts.push({x:cx,y:cy});}
-                  else if(seg[0]==='Q'){const pts=bezierQ({x:cx,y:cy},{x:seg[1]*ssx,y:seg[2]*ssy},{x:seg[3]*ssx,y:seg[4]*ssy},6);allPts.push(...pts);cx=seg[3]*ssx;cy=seg[4]*ssy;}
-                  else if(seg[0]==='C'){const pts=bezierC({x:cx,y:cy},{x:seg[1]*ssx,y:seg[2]*ssy},{x:seg[3]*ssx,y:seg[4]*ssy},{x:seg[5]*ssx,y:seg[6]*ssy},8);allPts.push(...pts);cx=seg[5]*ssx;cy=seg[6]*ssy;}
-                  else if(seg[0]==='Z'&&allPts.length>0){allPts.push({...allPts[0]});}
-                }
-                if(fc&&allPts.length>=3){
-                  const PDFLib=lib();const ops=[PDFLib.pushGraphicsState()];ops.push(PDFLib.setFillingColor(fc));if(col)ops.push(PDFLib.setStrokingColor(col));ops.push(PDFLib.setLineWidth(th));
-                  ops.push(PDFLib.moveTo(ox+S(allPts[0].x),flipY(oy+allPts[0].y)));
-                  for(let i=1;i<allPts.length;i++)ops.push(PDFLib.lineTo(ox+S(allPts[i].x),flipY(oy+allPts[i].y)));
-                  ops.push(PDFLib.closePath());ops.push(col?PDFLib.fillAndStroke():PDFLib.fill());ops.push(PDFLib.popGraphicsState());page.pushOperators(...ops);
-                } else {
-                  for(let i=1;i<allPts.length;i++){
-                    page.drawLine({start:{x:ox+S(allPts[i-1].x),y:flipY(oy+allPts[i-1].y)},end:{x:ox+S(allPts[i].x),y:flipY(oy+allPts[i].y)},color:col,thickness:th,opacity:obj.opacity??1});
+                  const op=seg[0];
+                  if(op==='M'){const p=annotPt(seg[1],seg[2]);ops.push(PDFLib.moveTo(p.x,p.y));hasPath=true;}
+                  else if(op==='L'){const p=annotPt(seg[1],seg[2]);ops.push(PDFLib.lineTo(p.x,p.y));}
+                  else if(op==='C'){
+                    const c1=annotPt(seg[1],seg[2]),c2=annotPt(seg[3],seg[4]),p=annotPt(seg[5],seg[6]);
+                    ops.push(PDFLib.appendBezierCurve(c1.x,c1.y,c2.x,c2.y,p.x,p.y));
                   }
+                  else if(op==='Q'){
+                    const qcp=annotPt(seg[1],seg[2]),ep=annotPt(seg[3],seg[4]);
+                    ops.push(PDFLib.appendQuadraticCurve(qcp.x,qcp.y,ep.x,ep.y));
+                  }
+                  else if(op==='Z'){ops.push(PDFLib.closePath());}
                 }
+                if(hasPath){
+                  if(fc&&col)ops.push(PDFLib.fillAndStroke());
+                  else if(fc)ops.push(PDFLib.fill());
+                  else ops.push(PDFLib.stroke());
+                }
+                ops.push(PDFLib.popGraphicsState());
+                page.pushOperators(...ops);
                 break;
               }
               case'textbox':case'i-text':case'itext':case'text':{const dFs=(obj.fontSize||16)*(obj.scaleY||1);const fs=S(dFs);const txtFont=await resolveFont(obj.fontFamily,obj.text,obj._pdfFontKey);const tbColor=obj.fill?lib().rgb(...hexToRgb(obj.fill)):lib().rgb(0,0,0);const tLines=(obj.text||'').split('\n');let tOff=0;for(const tl of tLines){if(tl.trim()){const tlY=flipY(obj.top+tOff,dFs);page.drawText(tl,{x:S(obj.left),y:tlY,size:fs,font:txtFont,color:tbColor,opacity:obj.opacity??1});if(obj.underline){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY-fs*0.15},end:{x:S(obj.left)+tw,y:tlY-fs*0.15},color:tbColor,thickness:fs*0.05});}if(obj.linethrough){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY+fs*0.35},end:{x:S(obj.left)+tw,y:tlY+fs*0.35},color:tbColor,thickness:fs*0.05});}}tOff+=dFs*1.2;}break;}
