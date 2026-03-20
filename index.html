@@ -1196,44 +1196,43 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                 const pCx=(pMinX+pMaxX)/2,pCy=(pMinY+pMaxY)/2;
                 const ssx=obj.scaleX||1,ssy=obj.scaleY||1;
                 const hw=(obj.width||0)*ssx/2,hh=(obj.height||0)*ssy/2;
-                // 各pathポイントのキャンバス座標を計算
                 function csPathPt(px,py){
                   const cx=(obj.left||0)+hw+(px-pCx)*ssx;
                   const cy=(obj.top||0)+hh+(py-pCy)*ssy;
                   return{x:S(cx),y:csPH-S(cy)};
                 }
-                // ベジェ曲線を線形化して描画
-                function lerp2(a,b,t2){return a+(b-a)*t2;}
-                function bezQ2(p0,cp,p1,n){const pts=[];for(let i=1;i<=n;i++){const t2=i/n;pts.push({x:lerp2(lerp2(p0.x,cp.x,t2),lerp2(cp.x,p1.x,t2),t2),y:lerp2(lerp2(p0.y,cp.y,t2),lerp2(cp.y,p1.y,t2),t2)});} return pts;}
-                function bezC2(p0,c1,c2,p1,n){const pts=[];for(let i=1;i<=n;i++){const t2=i/n;pts.push({x:(1-t2)**3*p0.x+3*(1-t2)**2*t2*c1.x+3*(1-t2)*t2**2*c2.x+t2**3*p1.x,y:(1-t2)**3*p0.y+3*(1-t2)**2*t2*c1.y+3*(1-t2)*t2**2*c2.y+t2**3*p1.y});} return pts;}
-                const allPts=[];let cpx=0,cpy=0,startX=0,startY=0;
+                // PDF operatorsでパスを構築（ベジェ曲線をそのまま保持）
+                const PDFLib=lib();
+                const ops=[PDFLib.pushGraphicsState()];
+                if(csFill)ops.push(PDFLib.setFillingColor(csFill));
+                if(csStroke)ops.push(PDFLib.setStrokingColor(csStroke));
+                ops.push(PDFLib.setLineWidth(csLW));
+                let hasPath=false;
                 for(const seg of obj.path){
                   const op=seg[0];
-                  if(op==='M'){cpx=seg[1];cpy=seg[2];startX=cpx;startY=cpy;allPts.push(csPathPt(cpx,cpy));}
-                  else if(op==='L'){cpx=seg[1];cpy=seg[2];allPts.push(csPathPt(cpx,cpy));}
-                  else if(op==='Q'){const pts=bezQ2(csPathPt(cpx,cpy),csPathPt(seg[1],seg[2]),csPathPt(seg[3],seg[4]),6);allPts.push(...pts);cpx=seg[3];cpy=seg[4];}
-                  else if(op==='C'){const pts=bezC2(csPathPt(cpx,cpy),csPathPt(seg[1],seg[2]),csPathPt(seg[3],seg[4]),csPathPt(seg[5],seg[6]),8);allPts.push(...pts);cpx=seg[5];cpy=seg[6];}
-                  else if(op==='Z'){allPts.push(csPathPt(startX,startY));}
-                }
-                // 塗りつぶし+ストロークをPDF operatorsで描画
-                if(csFill&&allPts.length>=3){
-                  const PDFLib=lib();
-                  const ops=[PDFLib.pushGraphicsState()];
-                  ops.push(PDFLib.setFillingColor(csFill));
-                  if(csStroke)ops.push(PDFLib.setStrokingColor(csStroke));
-                  ops.push(PDFLib.setLineWidth(csLW));
-                  ops.push(PDFLib.moveTo(allPts[0].x,allPts[0].y));
-                  for(let pi=1;pi<allPts.length;pi++)ops.push(PDFLib.lineTo(allPts[pi].x,allPts[pi].y));
-                  ops.push(PDFLib.closePath());
-                  ops.push(csStroke?PDFLib.fillAndStroke():PDFLib.fill());
-                  ops.push(PDFLib.popGraphicsState());
-                  page.pushOperators(...ops);
-                } else {
-                  const csCol=csStroke||lib().rgb(0,0,0);
-                  for(let pi=1;pi<allPts.length;pi++){
-                    page.drawLine({start:allPts[pi-1],end:allPts[pi],color:csCol,thickness:csLW,opacity:csOp});
+                  if(op==='M'){const p=csPathPt(seg[1],seg[2]);ops.push(PDFLib.moveTo(p.x,p.y));hasPath=true;}
+                  else if(op==='L'){const p=csPathPt(seg[1],seg[2]);ops.push(PDFLib.lineTo(p.x,p.y));}
+                  else if(op==='C'){
+                    const c1=csPathPt(seg[1],seg[2]),c2=csPathPt(seg[3],seg[4]),p=csPathPt(seg[5],seg[6]);
+                    ops.push(PDFLib.appendBezierCurve(c1.x,c1.y,c2.x,c2.y,p.x,p.y));
                   }
+                  else if(op==='Q'){
+                    // QをCに変換: CP1=P0+2/3*(QCP-P0), CP2=END+2/3*(QCP-END)
+                    const qcp=csPathPt(seg[1],seg[2]),ep=csPathPt(seg[3],seg[4]);
+                    // 直前の点を取得するため、最後のmoveTo/lineToの座標を追跡
+                    const prevOp=ops[ops.length-1];
+                    // 簡易的にappendQuadraticCurveを使用（PDF v operator）
+                    ops.push(PDFLib.appendQuadraticCurve(qcp.x,qcp.y,ep.x,ep.y));
+                  }
+                  else if(op==='Z'){ops.push(PDFLib.closePath());}
                 }
+                if(hasPath){
+                  if(csFill&&csStroke)ops.push(PDFLib.fillAndStroke());
+                  else if(csFill)ops.push(PDFLib.fill());
+                  else ops.push(PDFLib.stroke());
+                }
+                ops.push(PDFLib.popGraphicsState());
+                page.pushOperators(...ops);
               }
               continue;
             }
