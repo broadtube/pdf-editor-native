@@ -483,7 +483,29 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             results.push(r);lastFillPath=null;return;
           }
           if(cleaned.length>=4&&cleaned.length<=5&&cleaned[0].op==='M'&&cleaned.slice(1).every(p=>p.op==='L')){
-            Object.assign(r,{shape:'rect',x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh});
+            // 頂点を抽出し、閉合点（始点と同じ）を除去
+            const verts=cleaned.map(p=>({x:p.x,y:p.y}));
+            const eps=0.5;
+            const uv=[verts[0]];
+            for(let vi=1;vi<verts.length;vi++){
+              if(Math.abs(verts[vi].x-verts[0].x)<eps&&Math.abs(verts[vi].y-verts[0].y)<eps)continue;
+              uv.push(verts[vi]);
+            }
+            // 4つの異なる頂点で軸平行の矩形を形成するか検証
+            let isRect=false;
+            if(uv.length===4){
+              const xs=uv.map(v=>v.x).sort((a,b)=>a-b);
+              const ys=uv.map(v=>v.y).sort((a,b)=>a-b);
+              const xUniq=[xs[0]];if(Math.abs(xs[1]-xs[0])>eps)xUniq.push(xs[1]);if(Math.abs(xs[2]-xUniq[xUniq.length-1])>eps)xUniq.push(xs[2]);if(Math.abs(xs[3]-xUniq[xUniq.length-1])>eps)xUniq.push(xs[3]);
+              const yUniq=[ys[0]];if(Math.abs(ys[1]-ys[0])>eps)yUniq.push(ys[1]);if(Math.abs(ys[2]-yUniq[yUniq.length-1])>eps)yUniq.push(ys[2]);if(Math.abs(ys[3]-yUniq[yUniq.length-1])>eps)yUniq.push(ys[3]);
+              isRect=(xUniq.length===2&&yUniq.length===2);
+            }
+            if(isRect){
+              Object.assign(r,{shape:'rect',x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh});
+              results.push(r);lastFillPath=doFill?pathCopy:null;return;
+            }
+            // 矩形でないポリゴン（三角形等）はpathとして処理
+            Object.assign(r,{shape:'path',path:pathCopy,bbox:{x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh}});
             results.push(r);lastFillPath=doFill?pathCopy:null;return;
           }
           Object.assign(r,{shape:'path',path:pathCopy,bbox:{x:bb.minX,y:bb.minY,w:bb.bw,h:bb.bh}});
