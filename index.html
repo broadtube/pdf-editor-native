@@ -720,7 +720,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       setTool(t){
         tool=t; if(!canvas)return;
         canvas.isDrawingMode=(t===TOOLS.PENCIL);
-        if(canvas.isDrawingMode){canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
+        if(canvas.isDrawingMode){if(!canvas.freeDrawingBrush)canvas.freeDrawingBrush=new fabric.PencilBrush(canvas);canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
         if(t===TOOLS.TEXT){canvas.defaultCursor='text';canvas.selection=false;}
         else if(t===TOOLS.TEXT_EDIT){canvas.defaultCursor='text';canvas.selection=true;}
         else if(t===TOOLS.SHAPE_EDIT){canvas.defaultCursor='default';canvas.selection=true;}
@@ -730,7 +730,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       setProps(p){
         props={...props,...p};
-        if(canvas&&canvas.isDrawingMode){canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
+        if(canvas&&canvas.isDrawingMode){if(!canvas.freeDrawingBrush)canvas.freeDrawingBrush=new fabric.PencilBrush(canvas);canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
         const act=canvas?.getActiveObject();
         if(act){
           const isText=['textbox','i-text','itext','Textbox','IText'].includes(act.type);
