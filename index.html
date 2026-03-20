@@ -302,13 +302,35 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
 
   // --- History Manager ---
   function createHistoryManager() {
-    let undo=[], redo=[], onChange=null;
+    let undo=[], redo=[], onChange=null, _lastState=null;
     return {
-      push(e){ undo.push(e); if(undo.length>50)undo.shift(); redo=[]; onChange?.({canUndo:undo.length>0,canRedo:false}); },
-      undo(){ if(!undo.length)return null; const e=undo.pop(); redo.push(e); onChange?.({canUndo:undo.length>0,canRedo:redo.length>0}); return e; },
-      redo(){ if(!redo.length)return null; const e=redo.pop(); undo.push(e); onChange?.({canUndo:undo.length>0,canRedo:redo.length>0}); return e; },
+      push(e){
+        // 変更前の状態をundoスタックに保存（変更後の状態はe）
+        if(_lastState){undo.push(_lastState);}
+        if(undo.length>50)undo.shift();
+        _lastState=e;
+        redo=[];
+        onChange?.({canUndo:undo.length>0,canRedo:false});
+      },
+      setBaseline(e){ if(!_lastState)_lastState=e; },
+      undo(){
+        if(!undo.length)return null;
+        const prev=undo.pop();
+        if(_lastState)redo.push(_lastState);
+        _lastState=prev;
+        onChange?.({canUndo:undo.length>0,canRedo:redo.length>0});
+        return prev;
+      },
+      redo(){
+        if(!redo.length)return null;
+        const next=redo.pop();
+        if(_lastState)undo.push(_lastState);
+        _lastState=next;
+        onChange?.({canUndo:undo.length>0,canRedo:redo.length>0});
+        return next;
+      },
       canUndo(){ return undo.length>0; }, canRedo(){ return redo.length>0; },
-      clear(){ undo=[]; redo=[]; onChange?.({canUndo:false,canRedo:false}); },
+      clear(){ undo=[]; redo=[]; _lastState=null; onChange?.({canUndo:false,canRedo:false}); },
       setOnChange(cb){ onChange=cb; }
     };
   }
@@ -591,9 +613,20 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     function isShapeTool(t){ return[TOOLS.RECT,TOOLS.CIRCLE,TOOLS.ELLIPSE,TOOLS.TRIANGLE,TOOLS.DIAMOND,TOOLS.LINE,TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW,TOOLS.POLYGON,TOOLS.STAR,TOOLS.CLOUD,TOOLS.CLOUD_CALLOUT,TOOLS.CALLOUT,TOOLS.CROSS,TOOLS.HEART,TOOLS.BRACE].includes(t); }
     function isMarkupTool(t){ return[TOOLS.HIGHLIGHT,TOOLS.UNDERLINE,TOOLS.STRIKETHROUGH].includes(t); }
 
+    let _panDragging=false, _panLastX=0, _panLastY=0;
     function onMouseDown(opt){
       if(!canvas)return;
       const ptr=canvas.getPointer(opt.e);
+      // パンモード：ドラッグでスクロール
+      if(tool===TOOLS.PAN){
+        _panDragging=true;
+        _panLastX=opt.e.clientX;
+        _panLastY=opt.e.clientY;
+        canvas.defaultCursor='grabbing';
+        canvas.upperCanvasEl.style.cursor='grabbing';
+        opt.e.preventDefault();
+        return;
+      }
       // TEXT_EDITモード：クリック箇所のテキストのみをFabricオブジェクト化
       if(tool===TOOLS.TEXT_EDIT&&!opt.target){
         const self=canvas.__alRef; // ALへの参照（init時にセット）
@@ -610,6 +643,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       if((isShapeTool(tool)||isMarkupTool(tool))&&!opt.target){ drawing=true; drawStart=ptr; canvas.selection=false; }
     }
     function onMouseMove(opt){
+      if(_panDragging){
+        const dx=opt.e.clientX-_panLastX, dy=opt.e.clientY-_panLastY;
+        _panLastX=opt.e.clientX; _panLastY=opt.e.clientY;
+        const container=canvas.wrapperEl?.closest('.main-view');
+        if(container){container.scrollLeft-=dx;container.scrollTop-=dy;}
+        opt.e.preventDefault();
+        return;
+      }
       if(!drawing||!drawStart)return;
       const ptr=canvas.getPointer(opt.e);
       if(tempShape)canvas.remove(tempShape);
@@ -688,6 +729,12 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       if(tempShape)canvas.add(tempShape);
     }
     function onMouseUp(){
+      if(_panDragging){
+        _panDragging=false;
+        canvas.defaultCursor='grab';
+        canvas.upperCanvasEl.style.cursor='grab';
+        return;
+      }
       if(!drawing||!tempShape){drawing=false;drawStart=null;return;}
       tempShape.set({selectable:true,evented:true});
       canvas.setActiveObject(tempShape); canvas.renderAll();
@@ -722,7 +769,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         tool=t; if(!canvas)return;
         canvas.isDrawingMode=(t===TOOLS.PENCIL);
         if(canvas.isDrawingMode){if(!canvas.freeDrawingBrush)canvas.freeDrawingBrush=new fabric.PencilBrush(canvas);canvas.freeDrawingBrush.color=props.strokeColor||'#f00';canvas.freeDrawingBrush.width=props.strokeWidth||2;}
-        if(t===TOOLS.TEXT){canvas.defaultCursor='text';canvas.selection=false;}
+        if(t===TOOLS.PAN){canvas.defaultCursor='grab';canvas.selection=false;_panDragging=false;}
+        else if(t===TOOLS.TEXT){canvas.defaultCursor='text';canvas.selection=false;}
         else if(t===TOOLS.TEXT_EDIT){canvas.defaultCursor='text';canvas.selection=true;}
         else if(t===TOOLS.SHAPE_EDIT){canvas.defaultCursor='default';canvas.selection=true;}
         else if(isShapeTool(t)||isMarkupTool(t)){canvas.defaultCursor='crosshair';canvas.selection=false;}
@@ -1678,6 +1726,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           const w=d.width*p.zoom, h=d.height*p.zoom;
           if(!initd.current&&aRef.current){AL.init(aRef.current,w,h);AL._lastZoom=p.zoom;initd.current=true;}else{AL.resize(w,h,p.zoom);}
           await AL.loadPage(p.curPage);
+          // Undo用のベースライン状態をキャプチャ
+          HM.setBaseline({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
         }catch(e){console.error('レンダリングエラー:',e);}
       })();
     },[p.curPage,p.zoom,p.hasDoc,p.total,p.docId]);
@@ -1895,7 +1945,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         const ac=AL.getCanvas()?.getActiveObject();if(ac&&ac.isEditing)return;
         if(e.ctrlKey||e.metaKey){switch(e.key.toLowerCase()){case'z':e.preventDefault();if(e.shiftKey)actionsRef.current.doRedo();else actionsRef.current.doUndo();return;case'y':e.preventDefault();actionsRef.current.doRedo();return;case's':e.preventDefault();actionsRef.current.doSave();return;}}
         if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();AL.deleteSelected();return;}
-        if(e.key==='Escape'){const c=AL.getCanvas();if(c)c.discardActiveObject().renderAll();return;}
+        if(e.key==='Escape'){const c=AL.getCanvas();if(c){c.discardActiveObject();c.renderAll();}return;}
         if(e.key==='+'||e.key==='='){setZoom(z=>Math.min(ZOOM_MAX,z+ZOOM_STEP));return;}
         if(e.key==='-'){setZoom(z=>Math.max(ZOOM_MIN,z-ZOOM_STEP));return;}
         if(e.key==='?'){setDlg('help');return;}
