@@ -331,6 +331,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       canUndo(){ return undo.length>0; }, canRedo(){ return redo.length>0; },
       clear(){ undo=[]; redo=[]; _lastState=null; onChange?.({canUndo:false,canRedo:false}); },
+      resetForPage(e){ undo=[]; redo=[]; _lastState=e; onChange?.({canUndo:false,canRedo:false}); },
       setOnChange(cb){ onChange=cb; }
     };
   }
@@ -1066,6 +1067,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       onModified(cb){onMod=cb;},
       onSelection(cb){onSel=cb;},
       getCanvas(){return canvas;},
+      cancelPan(){if(_panDragging){_panDragging=false;if(canvas){canvas.defaultCursor='grab';canvas.upperCanvasEl.style.cursor='grab';}}},
       toJSON(){return canvas?canvas.toObject(['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough']):null;},
       resetPages(){ pageData.clear(); if(canvas)canvas.clear(); curPage=0; },
       destroy(){ if(canvas){try{const wrapper=canvas.wrapperEl||canvas.getElement()?.parentNode;canvas.dispose();if(wrapper&&wrapper.parentNode)wrapper.parentNode.removeChild(wrapper);}catch(e){console.warn('[PDF Editor] canvas destroy cleanup:',e);}canvas=null;} pageData.clear(); this._pageZoom.clear(); curPage=0; }
@@ -1317,7 +1319,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             // --- 通常の注釈 ---
             switch(t){
               case'rect':page.drawRectangle({x:S(obj.left),y:flipY(obj.top,obj.height*(obj.scaleY||1)),width:S(obj.width*(obj.scaleX||1)),height:S(obj.height*(obj.scaleY||1)),borderColor:obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;
-              case'circle':case'ellipse':{const rx=S((obj.rx||obj.radius||0)*(obj.scaleX||1)),ry=S((obj.ry||obj.radius||0)*(obj.scaleY||1));page.drawEllipse({x:S(obj.left)+rx,y:flipY(obj.top+(obj.ry||obj.radius||0)*(obj.scaleY||1)),xScale:rx,yScale:ry,borderColor:obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;}
+              case'circle':case'ellipse':{const rx=S((obj.rx||obj.radius||0)*(obj.scaleX||1)),ry=S((obj.ry||obj.radius||0)*(obj.scaleY||1));page.drawEllipse({x:S(obj.left)+rx,y:flipY(obj.top+(obj.ry||obj.radius||0)*(obj.scaleY||1)),xScale:rx,yScale:ry,borderColor:obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):undefined,borderWidth:S(obj.strokeWidth||1),color:obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined,opacity:obj.opacity??1});break;}
               case'triangle':{const w=S((obj.width||0)*(obj.scaleX||1)),h=S((obj.height||0)*(obj.scaleY||1)),bx=S(obj.left||0),by=flipY(obj.top||0,obj.height*(obj.scaleY||1));const col=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);page.drawLine({start:{x:bx+w/2,y:by+h},end:{x:bx,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx,y:by},end:{x:bx+w,y:by},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});page.drawLine({start:{x:bx+w,y:by},end:{x:bx+w/2,y:by+h},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
               case'line':{const lsx=obj.scaleX||1,lsy=obj.scaleY||1;const lMinX=Math.min(obj.x1||0,obj.x2||0),lMinY=Math.min(obj.y1||0,obj.y2||0);const lcx1=(obj.left||0)+((obj.x1||0)-lMinX)*lsx,lcy1=(obj.top||0)+((obj.y1||0)-lMinY)*lsy;const lcx2=(obj.left||0)+((obj.x2||0)-lMinX)*lsx,lcy2=(obj.top||0)+((obj.y2||0)-lMinY)*lsy;page.drawLine({start:{x:S(lcx1),y:flipY(lcy1)},end:{x:S(lcx2),y:flipY(lcy2)},color:obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0),thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});break;}
               case'path':{
@@ -1727,7 +1729,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           if(!initd.current&&aRef.current){AL.init(aRef.current,w,h);AL._lastZoom=p.zoom;initd.current=true;}else{AL.resize(w,h,p.zoom);}
           await AL.loadPage(p.curPage);
           // Undo用のベースライン状態をキャプチャ
-          HM.setBaseline({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
+          HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
         }catch(e){console.error('レンダリングエラー:',e);}
       })();
     },[p.curPage,p.zoom,p.hasDoc,p.total,p.docId]);
@@ -1945,7 +1947,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         const ac=AL.getCanvas()?.getActiveObject();if(ac&&ac.isEditing)return;
         if(e.ctrlKey||e.metaKey){switch(e.key.toLowerCase()){case'z':e.preventDefault();if(e.shiftKey)actionsRef.current.doRedo();else actionsRef.current.doUndo();return;case'y':e.preventDefault();actionsRef.current.doRedo();return;case's':e.preventDefault();actionsRef.current.doSave();return;}}
         if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();AL.deleteSelected();return;}
-        if(e.key==='Escape'){const c=AL.getCanvas();if(c){c.discardActiveObject();c.renderAll();}return;}
+        if(e.key==='Escape'){AL.cancelPan();const c=AL.getCanvas();if(c){c.discardActiveObject();c.renderAll();}return;}
         if(e.key==='+'||e.key==='='){setZoom(z=>Math.min(ZOOM_MAX,z+ZOOM_STEP));return;}
         if(e.key==='-'){setZoom(z=>Math.max(ZOOM_MIN,z-ZOOM_STEP));return;}
         if(e.key==='?'){setDlg('help');return;}
