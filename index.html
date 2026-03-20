@@ -994,9 +994,11 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       clearCsShapes(){
         if(!canvas)return;
+        _suppressModEvents=true; // システムクリーンアップは削除追跡を抑制
         const toRemove=canvas.getObjects().filter(o=>o.customType==='csShape'||o.customType==='csCover');
         toRemove.forEach(o=>canvas.remove(o));
         if(toRemove.length)canvas.renderAll();
+        _suppressModEvents=false;
       },
       hasModifiedCsShapes(){
         if(!canvas)return false;
