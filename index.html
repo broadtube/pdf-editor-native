@@ -255,9 +255,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
   function isPDF(f){ return f.type==='application/pdf'||f.name.toLowerCase().endsWith('.pdf'); }
   function isImage(f){ return f.type.startsWith('image/'); }
   function hexToRgb(hex){
-    if(!hex||hex==='transparent')return[0,0,0];
+    if(!hex||hex==='transparent'||hex==='none')return[0,0,0];
+    // rgb()/rgba()形式を処理
+    const rgbMatch=String(hex).match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    if(rgbMatch)return[parseInt(rgbMatch[1])/255,parseInt(rgbMatch[2])/255,parseInt(rgbMatch[3])/255];
     hex=hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
-    return [parseInt(hex.slice(0,2),16)/255,parseInt(hex.slice(2,4),16)/255,parseInt(hex.slice(4,6),16)/255];
+    const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
+    // NaN防止（不正な色値の場合は黒を返す）
+    return[isNaN(r)?0:r/255,isNaN(g)?0:g/255,isNaN(b)?0:b/255];
   }
   // --- Font Manager ---
   const FONT_DEFS = {
@@ -319,6 +324,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       async renderPage(num,scale,canvas){
         if(!pdfDoc)return;
         if(currentTask){try{currentTask.cancel();}catch(e){}} currentTask=null;
+        if(num<1||num>pdfDoc.numPages){console.warn('[PDF Editor] renderPage: invalid page number '+num);return;}
         const page=await pdfDoc.getPage(num), vp=page.getViewport({scale});
         canvas.width=vp.width; canvas.height=vp.height;
         const task=page.render({canvasContext:canvas.getContext('2d'),viewport:vp});
@@ -413,10 +419,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         let lastFillPath=null; // fill→strokeマージ用
         function mulMat(m1,m2){return{a:m1.a*m2.a+m1.c*m2.b,b:m1.b*m2.a+m1.d*m2.b,c:m1.a*m2.c+m1.c*m2.d,d:m1.b*m2.c+m1.d*m2.d,e:m1.a*m2.e+m1.c*m2.f+m1.e,f:m1.b*m2.e+m1.d*m2.f+m1.f};}
         function toHex(css){
-          if(!css||css==='none')return null;
+          if(!css||css==='none'||css==='transparent')return null;
           if(typeof css==='string'&&css.startsWith('#'))return css;
-          const m=String(css).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+          const m=String(css).match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
           if(m)return'#'+[m[1],m[2],m[3]].map(v=>parseInt(v).toString(16).padStart(2,'0')).join('');
+          // CSS名前付き色→hex変換
+          const namedColors={'black':'#000000','white':'#ffffff','red':'#ff0000','green':'#008000','blue':'#0000ff','yellow':'#ffff00','cyan':'#00ffff','magenta':'#ff00ff','gray':'#808080','grey':'#808080','orange':'#ffa500','purple':'#800080','pink':'#ffc0cb','brown':'#a52a2a'};
+          const lower=String(css).toLowerCase().trim();
+          if(namedColors[lower])return namedColors[lower];
           return String(css);
         }
         function xform(x,y){return{x:ctm.a*x+ctm.c*y+ctm.e,y:ctm.b*x+ctm.d*y+ctm.f};}
@@ -547,6 +557,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
   function createAnnotationLayer() {
     let canvas=null, tool=TOOLS.SELECT, props={...DEFAULT_PROPS}, onMod=null, onSel=null;
     let drawing=false, drawStart=null, tempShape=null;
+    let _suppressModEvents=false; // undo/redo中のイベント抑制フラグ
     const pageData=new Map();
     let curPage=0;
 
@@ -676,7 +687,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         const ce=document.createElement('canvas'); ce.id='annot-canvas'; el.appendChild(ce);
         canvas=new fabric.Canvas(ce,{width:w,height:h,selection:true,preserveObjectStacking:true});
         canvas.__alRef=this; // TEXT_EDIT用にALへの参照を保持
-        canvas.on('object:modified',(e)=>{if(e.target&&(e.target.customType==='shapeAnnot'||e.target.customType==='csShape'))e.target._isModified=true;onMod?.();}); canvas.on('object:added',()=>onMod?.()); canvas.on('object:removed',()=>onMod?.());
+        canvas.on('object:modified',(e)=>{if(_suppressModEvents)return;if(e.target&&(e.target.customType==='shapeAnnot'||e.target.customType==='csShape'))e.target._isModified=true;onMod?.();}); canvas.on('object:added',()=>{if(!_suppressModEvents)onMod?.();}); canvas.on('object:removed',()=>{if(!_suppressModEvents)onMod?.();});
         canvas.on('selection:created',e=>onSel?.(e)); canvas.on('selection:updated',e=>onSel?.(e));
         canvas.on('mouse:down',onMouseDown); canvas.on('mouse:move',onMouseMove); canvas.on('mouse:up',onMouseUp);
       },
@@ -717,8 +728,9 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       _pageZoom:new Map(),
       savePage(){ if(!canvas||!curPage)return null; const j=canvas.toObject(['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough']); pageData.set(curPage,j); this._pageZoom.set(curPage,this._lastZoom); return j; },
-      loadPage(num){ if(!canvas)return; if(curPage)this.savePage(); curPage=num; canvas.clear(); const d=pageData.get(num); if(d){const CUSTOM_KEYS=['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough'];const savedZoom=this._pageZoom.get(num)||1;const curZoom=this._lastZoom||1;const r=curZoom/savedZoom;canvas.loadFromJSON(d).then(()=>{canvas.getObjects().forEach((obj,i)=>{const src=d.objects&&d.objects[i];if(src){CUSTOM_KEYS.forEach(k=>{if(src[k]!==undefined)obj[k]=src[k];});}if(r!==1){obj.set({left:obj.left*r,top:obj.top*r,scaleX:(obj.scaleX||1)*r,scaleY:(obj.scaleY||1)*r});obj.setCoords();}});this._pageZoom.set(num,curZoom);canvas.renderAll();});} },
+      async loadPage(num){ if(!canvas)return; if(curPage)this.savePage(); curPage=num; canvas.clear(); const d=pageData.get(num); if(d){const CUSTOM_KEYS=['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough'];const savedZoom=this._pageZoom.get(num)||1;const curZoom=this._lastZoom||1;const r=curZoom/savedZoom;try{await canvas.loadFromJSON(d);canvas.getObjects().forEach((obj,i)=>{const src=d.objects&&d.objects[i];if(src){CUSTOM_KEYS.forEach(k=>{if(src[k]!==undefined)obj[k]=src[k];});}if(r!==1){obj.set({left:obj.left*r,top:obj.top*r,scaleX:(obj.scaleX||1)*r,scaleY:(obj.scaleY||1)*r});obj.setCoords();}});this._pageZoom.set(num,curZoom);canvas.renderAll();}catch(e){console.error('[PDF Editor] loadPage JSON restore error:',e);}} },
       getAllAnnotations(){ this.savePage(); return new Map(pageData); },
+      getPageZoom(num){ return this._pageZoom.get(num)||this._lastZoom||1; },
       // --- テキスト編集（クリック方式）---
       // テキストデータはメモリに保持、クリック時のみFabricオブジェクト化
       _textEditItems:[], // {x,y,width,height,fontSize,text,_pdfOriginal,type:'embedded'|'acrobat',_annotIndex,...}
@@ -940,6 +952,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       clearUnmodifiedPdfText(){
         if(!canvas)return;
+        // 編集中のテキストを確定させる
+        if(this._textEditActive&&this._textEditActive.isEditing){
+          this._textEditActive.exitEditing();
+        }
         const toRemove=canvas.getObjects().filter(o=>{
           if(o.customType==='shapeAnnot')return!o._isModified;
           if(o.customType!=='pdfText'&&o.customType!=='freeTextAnnot')return false;
@@ -963,16 +979,17 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         if(!canvas)return[];
         return canvas.getObjects().filter(o=>o.customType==='csShape');
       },
-      async addImage(dataUrl){ const img=await fabric.Image.fromURL(dataUrl);const mx=400;if(img.width>mx||img.height>mx){const s=mx/Math.max(img.width,img.height);img.scaleToWidth(img.width*s);}canvas.add(img);canvas.setActiveObject(img);canvas.renderAll(); },
+      async addImage(dataUrl){ if(!canvas)return;const img=await fabric.Image.fromURL(dataUrl);const mx=400;if(img.width>mx||img.height>mx){const s=mx/Math.max(img.width,img.height);img.scaleToWidth(img.width*s);}canvas.add(img);canvas.setActiveObject(img);canvas.renderAll(); },
       deleteSelected(){ if(!canvas)return; const a=canvas.getActiveObjects(); a.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.renderAll(); },
       _lastZoom:1,
       resize(w,h,newZoom){ if(!canvas)return; canvas.setDimensions({width:w,height:h}); if(newZoom&&this._lastZoom&&newZoom!==this._lastZoom){const r=newZoom/this._lastZoom;canvas.getObjects().forEach(o=>{o.set({left:o.left*r,top:o.top*r,scaleX:(o.scaleX||1)*r,scaleY:(o.scaleY||1)*r});o.setCoords();});this._lastZoom=newZoom;canvas.renderAll();}else{if(newZoom)this._lastZoom=newZoom;canvas.renderAll();} },
+      suppressModEvents(v){_suppressModEvents=!!v;},
       onModified(cb){onMod=cb;},
       onSelection(cb){onSel=cb;},
       getCanvas(){return canvas;},
       toJSON(){return canvas?canvas.toObject(['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough']):null;},
       resetPages(){ pageData.clear(); if(canvas)canvas.clear(); curPage=0; },
-      destroy(){ if(canvas){canvas.dispose();canvas=null;} pageData.clear(); curPage=0; }
+      destroy(){ if(canvas){try{const wrapper=canvas.wrapperEl||canvas.getElement()?.parentNode;canvas.dispose();if(wrapper&&wrapper.parentNode)wrapper.parentNode.removeChild(wrapper);}catch(e){console.warn('[PDF Editor] canvas destroy cleanup:',e);}canvas=null;} pageData.clear(); this._pageZoom.clear(); curPage=0; }
     };
   }
 
@@ -1062,6 +1079,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           const obj=annotJSON.objects[oi];
           const t=(obj.type||'').toLowerCase();
           const ct=obj.customType||'';
+          // csCover（白矩形カバー）やexcludeFromExportオブジェクトはスキップ
+          if(ct==='csCover'||obj.excludeFromExport)continue;
           console.log('[PDF Editor] embed obj['+oi+'] type='+obj.type+' customType='+ct+' text='+(obj.text||'').substring(0,30)+' _originalText='+(obj._originalText||'').substring(0,30)+' _isModified='+obj._isModified);
           try{
             // --- PDFテキスト編集（白矩形+再描画方式）---
@@ -1235,15 +1254,30 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                   else if(seg[0]==='C'){const pts=bezierC({x:cx,y:cy},{x:seg[1]*ssx,y:seg[2]*ssy},{x:seg[3]*ssx,y:seg[4]*ssy},{x:seg[5]*ssx,y:seg[6]*ssy},8);allPts.push(...pts);cx=seg[5]*ssx;cy=seg[6]*ssy;}
                   else if(seg[0]==='Z'&&allPts.length>0){allPts.push({...allPts[0]});}
                 }
-                for(let i=1;i<allPts.length;i++){
-                  page.drawLine({start:{x:ox+S(allPts[i-1].x),y:flipY(oy+allPts[i-1].y)},end:{x:ox+S(allPts[i].x),y:flipY(oy+allPts[i].y)},color:col,thickness:th,opacity:obj.opacity??1});
+                if(fc&&allPts.length>=3){
+                  const PDFLib=lib();const ops=[PDFLib.pushGraphicsState()];ops.push(PDFLib.setFillingColor(fc));if(col)ops.push(PDFLib.setStrokingColor(col));ops.push(PDFLib.setLineWidth(th));
+                  ops.push(PDFLib.moveTo(ox+S(allPts[0].x),flipY(oy+allPts[0].y)));
+                  for(let i=1;i<allPts.length;i++)ops.push(PDFLib.lineTo(ox+S(allPts[i].x),flipY(oy+allPts[i].y)));
+                  ops.push(PDFLib.closePath());ops.push(col?PDFLib.fillAndStroke():PDFLib.fill());ops.push(PDFLib.popGraphicsState());page.pushOperators(...ops);
+                } else {
+                  for(let i=1;i<allPts.length;i++){
+                    page.drawLine({start:{x:ox+S(allPts[i-1].x),y:flipY(oy+allPts[i-1].y)},end:{x:ox+S(allPts[i].x),y:flipY(oy+allPts[i].y)},color:col,thickness:th,opacity:obj.opacity??1});
+                  }
                 }
                 break;
               }
               case'textbox':case'i-text':case'itext':case'text':{const dFs=(obj.fontSize||16)*(obj.scaleY||1);const fs=S(dFs);const txtFont=await resolveFont(obj.fontFamily,obj.text,obj._pdfFontKey);const tbColor=obj.fill?lib().rgb(...hexToRgb(obj.fill)):lib().rgb(0,0,0);const tLines=(obj.text||'').split('\n');let tOff=0;for(const tl of tLines){if(tl.trim()){const tlY=flipY(obj.top+tOff,dFs);page.drawText(tl,{x:S(obj.left),y:tlY,size:fs,font:txtFont,color:tbColor,opacity:obj.opacity??1});if(obj.underline){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY-fs*0.15},end:{x:S(obj.left)+tw,y:tlY-fs*0.15},color:tbColor,thickness:fs*0.05});}if(obj.linethrough){const tw=txtFont.widthOfTextAtSize(tl,fs);page.drawLine({start:{x:S(obj.left),y:tlY+fs*0.35},end:{x:S(obj.left)+tw,y:tlY+fs*0.35},color:tbColor,thickness:fs*0.05});}}tOff+=dFs*1.2;}break;}
-              case'polygon':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=0;pi<obj.points.length;pi++){const cur=obj.points[pi],nxt=obj.points[(pi+1)%obj.points.length];page.drawLine({start:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},end:{x:ox+S(nxt.x*sx),y:flipY(oy+nxt.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
+              case'polygon':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const fc=obj.fill&&obj.fill!=='transparent'?lib().rgb(...hexToRgb(obj.fill)):undefined;const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;
+                if(fc&&obj.points.length>=3){
+                  const PDFLib=lib();const ops=[PDFLib.pushGraphicsState()];ops.push(PDFLib.setFillingColor(fc));if(col)ops.push(PDFLib.setStrokingColor(col));ops.push(PDFLib.setLineWidth(S(obj.strokeWidth||1)));
+                  const p0={x:ox+S(obj.points[0].x*sx),y:flipY(oy+obj.points[0].y*sy)};ops.push(PDFLib.moveTo(p0.x,p0.y));
+                  for(let pi=1;pi<obj.points.length;pi++){const pt={x:ox+S(obj.points[pi].x*sx),y:flipY(oy+obj.points[pi].y*sy)};ops.push(PDFLib.lineTo(pt.x,pt.y));}
+                  ops.push(PDFLib.closePath());ops.push(col?PDFLib.fillAndStroke():PDFLib.fill());ops.push(PDFLib.popGraphicsState());page.pushOperators(...ops);
+                } else {
+                  for(let pi=0;pi<obj.points.length;pi++){const cur=obj.points[pi],nxt=obj.points[(pi+1)%obj.points.length];page.drawLine({start:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},end:{x:ox+S(nxt.x*sx),y:flipY(oy+nxt.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}
+                }}break;}
               case'polyline':{if(obj.points&&obj.points.length>=2){const col=obj.stroke?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=1;pi<obj.points.length;pi++){const prev=obj.points[pi-1],cur=obj.points[pi];page.drawLine({start:{x:ox+S(prev.x*sx),y:flipY(oy+prev.y*sy)},end:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
-              case'group':if(obj.objects)for(const ch of obj.objects){const adj={...ch,left:(ch.left||0)*(obj.scaleX||1)+(obj.left||0),top:(ch.top||0)*(obj.scaleY||1)+(obj.top||0),scaleX:(ch.scaleX||1)*(obj.scaleX||1),scaleY:(ch.scaleY||1)*(obj.scaleY||1),strokeWidth:ch.strokeWidth||obj.strokeWidth||1,stroke:ch.stroke||obj.stroke,fill:ch.fill||obj.fill,opacity:ch.opacity??obj.opacity??1};annotJSON.objects.push(adj);}break;
+              case'group':{const groupChildren=obj.objects?[...obj.objects]:[];for(const ch of groupChildren){const adj={...ch,left:(ch.left||0)*(obj.scaleX||1)+(obj.left||0),top:(ch.top||0)*(obj.scaleY||1)+(obj.top||0),scaleX:(ch.scaleX||1)*(obj.scaleX||1),scaleY:(ch.scaleY||1)*(obj.scaleY||1),strokeWidth:ch.strokeWidth||obj.strokeWidth||1,stroke:ch.stroke||obj.stroke,fill:ch.fill||obj.fill,opacity:ch.opacity??obj.opacity??1};annotJSON.objects.push(adj);}break;}
               default:console.warn('[PDF Editor] Unknown annotation type: "'+obj.type+'" — skipped');break;
             }
           }catch(e){console.error('[PDF Editor] 注釈埋込失敗 type='+obj.type+' customType='+ct+':',e);}
@@ -1479,14 +1513,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         <div class="toolbar-sep"></div>
         <div class="toolbar-group">
           <button class="tool-btn" onClick=${()=>p.onPage(p.curPage-1)} disabled=${p.curPage<=1}>◀</button>
-          <input type="number" class="page-input" value=${p.curPage} min="1" max=${p.total} onInput=${e=>{const v=parseInt(e.target.value);if(v>=1&&v<=p.total)p.onPage(v);}} />
+          <input type="number" class="page-input" value=${p.curPage} min="1" max=${p.total} onInput=${e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1&&v<=p.total)p.onPage(v);}} onBlur=${e=>{e.target.value=p.curPage;}} />
           <span class="page-total">/ ${p.total}</span>
           <button class="tool-btn" onClick=${()=>p.onPage(p.curPage+1)} disabled=${p.curPage>=p.total}>▶</button>
         </div>
         <div class="toolbar-sep"></div>
         <div class="toolbar-group">
           <button class="tool-btn" onClick=${()=>p.onZoom(Math.max(ZOOM_MIN,p.zoom-ZOOM_STEP))}>➖</button>
-          <input type="number" class="zoom-input" value=${zp} min=${ZOOM_MIN*100} max=${ZOOM_MAX*100} onInput=${e=>{const z=parseInt(e.target.value)/100;if(z>=ZOOM_MIN&&z<=ZOOM_MAX)p.onZoom(z);}} />
+          <input type="number" class="zoom-input" value=${zp} min=${ZOOM_MIN*100} max=${ZOOM_MAX*100} onInput=${e=>{const z=parseInt(e.target.value)/100;if(!isNaN(z)&&z>=ZOOM_MIN&&z<=ZOOM_MAX)p.onZoom(z);}} onBlur=${e=>{e.target.value=Math.round(p.zoom*100);}} />
           <span class="zoom-unit">%</span>
           <button class="tool-btn" onClick=${()=>p.onZoom(Math.min(ZOOM_MAX,p.zoom+ZOOM_STEP))}>➕</button>
         </div>
@@ -1581,16 +1615,24 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
 
   function MainView(p){
     const cRef=useRef(null), pRef=useRef(null), aRef=useRef(null), initd=useRef(false);
+    const lastDocId=useRef(null);
     useEffect(()=>{
       if(!p.hasDoc||!p.curPage||!pRef.current)return;
       const doc=RL.getDoc(); if(!doc)return;
+      // 新ドキュメント検出時に注釈レイヤーを再初期化
+      if(lastDocId.current!==null&&lastDocId.current!==p.docId){
+        AL.destroy();initd.current=false;
+        // annot-containerの残存DOM要素をクリア
+        if(aRef.current)aRef.current.innerHTML='';
+      }
+      lastDocId.current=p.docId;
       (async()=>{
         try{
           await RL.renderPage(p.curPage,p.zoom,pRef.current);
           const d=await RL.getPageDims(p.curPage);
           const w=d.width*p.zoom, h=d.height*p.zoom;
           if(!initd.current&&aRef.current){AL.init(aRef.current,w,h);AL._lastZoom=p.zoom;initd.current=true;}else{AL.resize(w,h,p.zoom);}
-          AL.loadPage(p.curPage);
+          await AL.loadPage(p.curPage);
         }catch(e){console.error('レンダリングエラー:',e);}
       })();
     },[p.curPage,p.zoom,p.hasDoc,p.total,p.docId]);
@@ -1611,13 +1653,23 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           if(AL.hasModifiedCsShapes()&&!autoSaveLockRef.current){
             autoSaveLockRef.current=true;
             try{
-              const csObjs=AL.getCsShapeObjects();
+              // 自動保存前にユーザー注釈をpageDataに保存（データ消失防止）
+              AL.savePage();
+              // csObjsのプロパティをJSONコピーで確保（canvas操作後も参照が安全）
+              const csObjs=AL.getCsShapeObjects().map(o=>{
+                const j=o.toObject(['customType','_csOriginal','_isModified']);
+                j.customType=o.customType;j._csOriginal=o._csOriginal;j._isModified=o._isModified;
+                return j;
+              });
               await PM.embedAnnotations(p.curPage-1,{objects:csObjs},AL._lastZoom);
               if(editLoadIdRef.current!==loadId){autoSaveLockRef.current=false;return;}
               const bytes=await PM.save();
+              if(!bytes){throw new Error('PM.save() returned null');}
               await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);
               // csShape/csCoverのみ除去（通常注釈はpageData/canvasに残す）
               AL.clearCsShapes();
+              // pageDataの古いcsShapeもクリーンアップ（ゴースト図形防止）
+              AL.savePage();
               // PDF.jsを新PDFで再描画（編集済み図形が反映された状態に）
               if(pRef.current)await RL.renderPage(p.curPage,p.zoom,pRef.current);
               console.log('[PDF Editor] CS図形編集を自動保存しました');
@@ -1770,6 +1822,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     const[thumbs,setThumbs]=useState([]),[outline,setOutline]=useState([]),[searchRes,setSearchRes]=useState([]);
     const[dlg,setDlg]=useState(null),[toasts,setToasts]=useState([]);
     const pendingPdf=useRef(null);
+    const actionsRef=useRef({});
 
     const toast=useCallback((text,type='info')=>{
       const m={text,type,id:Date.now()};
@@ -1778,15 +1831,21 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     },[]);
 
     useEffect(()=>{HM.setOnChange(({canUndo:u,canRedo:r})=>{setCanUndo(u);setCanRedo(r);});},[]);
-    useEffect(()=>{AL.onModified(()=>{const j=AL.toJSON();HM.push({type:'annotation',pageNumber:curPage,data:j,timestamp:Date.now()});});},[curPage]);
+    const curPageRef=useRef(curPage);
+    useEffect(()=>{curPageRef.current=curPage;},[curPage]);
+    useEffect(()=>{AL.onModified(()=>{const j=AL.toJSON();HM.push({type:'annotation',pageNumber:curPageRef.current,data:j,timestamp:Date.now()});});},[]);
     useEffect(()=>{AL.onSelection(e=>{const obj=e.selected?.[0];if(!obj)return;const t=(obj.type||'').toLowerCase();if(['textbox','i-text','itext','text'].includes(t)){setSp(prev=>({...prev,fontSize:Math.round(obj.fontSize||16),fontFamily:obj._pdfFontKey||'Noto Sans JP',fontWeight:obj.fontWeight||'normal',fontStyle:obj.fontStyle||'normal',textColor:obj.fill||'#000',underline:!!obj.underline,linethrough:!!obj.linethrough,opacity:obj.opacity??1}));}});},[]);
 
+    // actionsRefに最新の関数参照を保持（keydownハンドラのstale closure防止）
+    useEffect(()=>{actionsRef.current={doUndo,doRedo,doSave};});
     // Keyboard
     useEffect(()=>{
       function onKey(e){
         const tag=e.target.tagName;if(tag==='INPUT'||tag==='TEXTAREA'||e.target.isContentEditable)return;
-        if(e.ctrlKey||e.metaKey){switch(e.key.toLowerCase()){case'z':e.preventDefault();if(e.shiftKey)doRedo();else doUndo();return;case'y':e.preventDefault();doRedo();return;case's':e.preventDefault();doSave();return;}}
-        if(e.key==='Delete'||e.key==='Backspace'){AL.deleteSelected();return;}
+        // Fabric.jsテキスト編集中はショートカット無効（Delete/Backspace等をテキスト操作に使う）
+        const ac=AL.getCanvas()?.getActiveObject();if(ac&&ac.isEditing)return;
+        if(e.ctrlKey||e.metaKey){switch(e.key.toLowerCase()){case'z':e.preventDefault();if(e.shiftKey)actionsRef.current.doRedo();else actionsRef.current.doUndo();return;case'y':e.preventDefault();actionsRef.current.doRedo();return;case's':e.preventDefault();actionsRef.current.doSave();return;}}
+        if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();AL.deleteSelected();return;}
         if(e.key==='Escape'){const c=AL.getCanvas();if(c)c.discardActiveObject().renderAll();return;}
         if(e.key==='+'||e.key==='='){setZoom(z=>Math.min(ZOOM_MAX,z+ZOOM_STEP));return;}
         if(e.key==='-'){setZoom(z=>Math.max(ZOOM_MIN,z-ZOOM_STEP));return;}
@@ -1803,18 +1862,24 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
 
     async function loadPDF(file){
       if(!isPDF(file)){toast('有効なPDFファイルを選択してください','error');return;}
-      try{const data=await readFileAsArrayBuffer(file);await loadFromData(data,file.name);}
-      catch(e){console.error('[PDF Editor] loadPDF error:',e);if(e.message?.includes('password')){pendingPdf.current={data:await readFileAsArrayBuffer(file),name:file.name};setDlg('pw');}else{toast('読み込み失敗: '+e.message,'error');}}
+      let data;
+      try{data=await readFileAsArrayBuffer(file);await loadFromData(data,file.name);}
+      catch(e){console.error('[PDF Editor] loadPDF error:',e);if((e.message?.includes('password')||e.name==='PasswordException')&&data){pendingPdf.current={data,name:file.name};setDlg('pw');}else{toast('読み込み失敗: '+e.message,'error');}}
     }
     async function loadFromData(data,name,pw){
       try{
-        const doc=await RL.loadDocument(data,pw);await PM.load(data);
+        // ArrayBufferのコピーを確保（転送済み防止）
+        const dataCopy=data instanceof ArrayBuffer?data.slice(0):data;
+        const doc=await RL.loadDocument(dataCopy,pw);
+        try{await PM.load(dataCopy);}catch(pmErr){console.error('[PDF Editor] PM.load error (RL succeeded):',pmErr);throw pmErr;}
+        AL.resetPages(); // 前ドキュメントの注釈データをクリア
         setHasDoc(true);setFName(name||'document.pdf');setTotal(doc.numPages);setCurPage(1);setDocId(d=>d+1);HM.clear();
         toast(name+' を読み込みました ('+doc.numPages+'ページ)','success');
         genThumbs(doc.numPages);const ol=await RL.getOutline();setOutline(ol);
       }catch(e){console.error('[PDF Editor] loadFromData error:',e);if(e.message?.includes('password')||e.name==='PasswordException'){pendingPdf.current={data,name};setDlg('pw');}else{toast('読み込み失敗: '+e.message,'error');}}
     }
-    async function genThumbs(n){const t=[];for(let i=1;i<=n;i++){try{const d=await RL.genThumb(i,150);t.push({pageNumber:i,dataUrl:d,rotation:0});}catch(e){t.push({pageNumber:i,dataUrl:'',rotation:0});}}setThumbs(t);}
+    const genThumbsId=useRef(0);
+    async function genThumbs(n){const id=++genThumbsId.current;const t=[];for(let i=1;i<=n;i++){if(genThumbsId.current!==id)return;try{const d=await RL.genThumb(i,150);t.push({pageNumber:i,dataUrl:d,rotation:0});}catch(e){t.push({pageNumber:i,dataUrl:'',rotation:0});}}if(genThumbsId.current===id)setThumbs(t);}
     function openFile(){const i=document.createElement('input');i.type='file';i.accept='.pdf';i.onchange=e=>{if(e.target.files[0])loadPDF(e.target.files[0]);};i.click();}
     function onDrop(file){if(isPDF(file))loadPDF(file);else if(isImage(file))readFileAsDataURL(file).then(d=>AL.addImage(d));}
 
@@ -1834,8 +1899,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           console.log('[PDF Editor] 注釈削除対象:',toDelete);
           for(const{pageIdx,annotIndex}of toDelete)PM.removeFreeTextAnnotation(pageIdx,annotIndex);
         }
-        for(const[pg,d]of all)await PM.embedAnnotations(pg-1,d,zoom);
-        const bytes=await PM.save();downloadUint8(bytes,fName.replace('.pdf','_edited.pdf'));
+        for(const[pg,d]of all){const pgZoom=AL.getPageZoom(pg);await PM.embedAnnotations(pg-1,d,pgZoom);}
+        const bytes=await PM.save();
+        if(!bytes){toast('保存データの生成に失敗しました','error');return;}
+        downloadUint8(bytes,fName.replace('.pdf','_edited.pdf'));
         // 保存後、PDF.jsを再読み込みしてPM/RLを同期（白矩形・図形編集を反映）
         try{
           await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);
@@ -1848,15 +1915,16 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     }
     const CUSTOM_KEYS=['customType','stampType','noteComment','_pdfOriginal','_pdfOriginals','_annotIndex','_isModified','_originalText','_textEditType','_pdfFontKey','_annotSubtype','_csOriginal','underline','linethrough'];
     function restoreCustomProps(c,jsonData){c.getObjects().forEach((obj,i)=>{const src=jsonData.objects&&jsonData.objects[i];if(src){CUSTOM_KEYS.forEach(k=>{if(src[k]!==undefined)obj[k]=src[k];});}});}
-    function doUndo(){const e=HM.undo();if(e?.type==='annotation'){const c=AL.getCanvas();if(c&&e.data)c.loadFromJSON(e.data).then(()=>{restoreCustomProps(c,e.data);c.renderAll();});}}
-    function doRedo(){const e=HM.redo();if(e?.type==='annotation'){const c=AL.getCanvas();if(c&&e.data)c.loadFromJSON(e.data).then(()=>{restoreCustomProps(c,e.data);c.renderAll();});}}
+    async function doUndo(){const e=HM.undo();if(e?.type==='annotation'){const c=AL.getCanvas();if(c&&e.data){try{AL.suppressModEvents(true);await c.loadFromJSON(e.data);restoreCustomProps(c,e.data);c.renderAll();}catch(err){console.error('[PDF Editor] undo restore error:',err);}finally{AL.suppressModEvents(false);}}}}
+    async function doRedo(){const e=HM.redo();if(e?.type==='annotation'){const c=AL.getCanvas();if(c&&e.data){try{AL.suppressModEvents(true);await c.loadFromJSON(e.data);restoreCustomProps(c,e.data);c.renderAll();}catch(err){console.error('[PDF Editor] redo restore error:',err);}finally{AL.suppressModEvents(false);}}}}
 
     function onPage(p){if(p>=1&&p<=total)setCurPage(p);}
-    function rotL(){if(!hasDoc)return;PM.rotatePage(curPage-1,-90);toast('左に回転');genThumbs(total);}
-    function rotR(){if(!hasDoc)return;PM.rotatePage(curPage-1,90);toast('右に回転');genThumbs(total);}
-    function onReorder(f,t){PM.movePage(f,t);const a=[...thumbs];const[x]=a.splice(f,1);a.splice(t,0,x);setThumbs(a);toast('ページ移動');}
-    function onDelPage(i){PM.deletePage(i);const n=total-1;setTotal(n);if(curPage>n)setCurPage(n);genThumbs(n);toast('ページ削除');}
-    function onInsert(i){PM.insertBlankPage(i);const n=total+1;setTotal(n);genThumbs(n);toast('空白ページ挿入');}
+    async function syncAfterPMChange(){try{const bytes=await PM.save();if(bytes){await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);AL.resetPages();setDocId(d=>d+1);}}catch(e){console.warn('[PDF Editor] PM同期エラー:',e);}}
+    async function rotL(){if(!hasDoc)return;PM.rotatePage(curPage-1,-90);await syncAfterPMChange();genThumbs(total);toast('左に回転');}
+    async function rotR(){if(!hasDoc)return;PM.rotatePage(curPage-1,90);await syncAfterPMChange();genThumbs(total);toast('右に回転');}
+    async function onReorder(f,t){PM.movePage(f,t);const a=[...thumbs];const[x]=a.splice(f,1);a.splice(t,0,x);setThumbs(a);await syncAfterPMChange();toast('ページ移動');}
+    async function onDelPage(i){if(total<=1){toast('最後のページは削除できません','error');return;}PM.deletePage(i);const n=total-1;setTotal(n);if(curPage>n)setCurPage(Math.max(1,n));await syncAfterPMChange();genThumbs(n);toast('ページ削除');}
+    async function onInsert(i){PM.insertBlankPage(i);const n=total+1;setTotal(n);await syncAfterPMChange();genThumbs(n);toast('空白ページ挿入');}
     async function onSearch(q){if(!hasDoc)return;const r=await RL.searchText(q);setSearchRes(r);if(r.length)toast(r.length+'件');}
     async function onMerge(bufs){try{toast('マージ中...');const m=await PM.merge(bufs);downloadUint8(m,'merged.pdf');setDlg(null);toast('マージ完了','success');}catch(e){toast('マージ失敗: '+e.message,'error');}}
     async function onSplit(ranges){try{toast('分割中...');const res=await PM.split(ranges);for(let i=0;i<res.length;i++)downloadUint8(res[i],fName.replace('.pdf','_part'+(i+1)+'.pdf'));setDlg(null);toast(res.length+'ファイルに分割','success');}catch(e){toast('分割失敗: '+e.message,'error');}}
@@ -1867,7 +1935,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     function toggleDark(){darkMode=!darkMode;localStorage.setItem('pdf-dark',String(darkMode));applyTheme();setDark(darkMode);}
     function onPropsChange(c){const n={...sp,...c};setSp(n);AL.setProps(n);}
 
-    useEffect(()=>{if(tool===TOOLS.IMAGE){const i=document.createElement('input');i.type='file';i.accept='image/*';i.onchange=async e=>{if(e.target.files[0]){const d=await readFileAsDataURL(e.target.files[0]);AL.addImage(d);}setTool(TOOLS.SELECT);};i.click();}},[tool]);
+    useEffect(()=>{if(tool===TOOLS.IMAGE){const i=document.createElement('input');i.type='file';i.accept='image/*';i.onchange=async e=>{if(e.target.files[0]){const d=await readFileAsDataURL(e.target.files[0]);AL.addImage(d);}setTool(TOOLS.SELECT);};
+      // キャンセル時もSELECTに戻す（focusイベントで検出）
+      const onFocus=()=>{setTimeout(()=>{if(!i.files||!i.files.length)setTool(TOOLS.SELECT);},300);window.removeEventListener('focus',onFocus);};
+      window.addEventListener('focus',onFocus);i.click();}},[tool]);
 
     const showProps=tool!==TOOLS.SELECT&&tool!==TOOLS.PAN;
 
