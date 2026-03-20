@@ -83,7 +83,11 @@ body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif
 .shape-dropdown-panel .shape-label { font-size:10px; grid-column:1/-1; color:var(--text-secondary); padding:2px 4px; border-top:1px solid var(--border-color); margin-top:2px; }
 
 /* Sidebar */
-.sidebar { width:220px; min-width:220px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; overflow:hidden; }
+.sidebar { width:220px; min-width:220px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; overflow:hidden; position:relative; transition:width .2s,min-width .2s; }
+.sidebar.collapsed { width:0; min-width:0; border-right:none; overflow:hidden; }
+.sidebar.collapsed .sidebar-tabs,.sidebar.collapsed .sidebar-content { display:none; }
+.sidebar-toggle { position:absolute; right:-20px; top:50%; transform:translateY(-50%); width:20px; height:48px; background:var(--bg-secondary); border:1px solid var(--border-color); border-left:none; border-radius:0 6px 6px 0; cursor:pointer; display:flex; align-items:center; justify-content:center; z-index:5; font-size:12px; color:var(--text-secondary); padding:0; }
+.sidebar.collapsed .sidebar-toggle { right:-20px; }
 .sidebar-tabs { display:flex; border-bottom:1px solid var(--border-color); }
 .sidebar-tab { flex:1; padding:8px 4px; border:none; background:transparent; cursor:pointer; font-size:12px; color:var(--text-secondary); border-bottom:2px solid transparent; transition:all .15s; }
 .sidebar-tab:hover { background:var(--bg-secondary); }
@@ -788,6 +792,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             if(p.strokeColor!==undefined)act.set('stroke',p.strokeColor);
             if(p.fillColor!==undefined)act.set('fill',p.fillColor);
             if(p.strokeWidth!==undefined)act.set('strokeWidth',p.strokeWidth);
+            // Group内の子要素にも適用（矢印・双方向矢印・曲線矢印・吹き出し雲等）
+            if(act.type==='group'&&act._objects){
+              for(const ch of act._objects){
+                if(p.strokeColor!==undefined){ch.set('stroke',p.strokeColor);if(ch.type==='triangle')ch.set('fill',p.strokeColor);}
+                if(p.fillColor!==undefined&&ch.type!=='triangle')ch.set('fill',p.fillColor);
+                if(p.strokeWidth!==undefined)ch.set('strokeWidth',p.strokeWidth);
+              }
+            }
           }
           if(p.opacity!==undefined)act.set('opacity',p.opacity);
           if(isText){
@@ -869,6 +881,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       // 図形注釈をFabricオブジェクトとしてCanvasに追加
       addShapeAnnotations(shapes,dims,zoom){
         if(!canvas||!shapes||!shapes.length)return 0;
+        _suppressModEvents=true;
         let count=0;
         for(const s of shapes){
           try{
@@ -966,6 +979,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             }
           }catch(e){console.warn('[PDF Editor] 図形注釈Fabric化失敗:',s.subtype,e);}
         }
+        _suppressModEvents=false;
         if(count)canvas.renderAll();
         console.log('[PDF Editor] 図形注釈追加: '+count+'件');
         return count;
@@ -974,6 +988,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       // 座標はRL.getContentStreamShapes()から画面座標(scale=1)で受け取る
       addContentStreamShapes(shapes,dims,zoom){
         if(!canvas||!shapes||!shapes.length)return 0;
+        _suppressModEvents=true; // 大量追加中の履歴記録・イベント抑制（O(N²)防止）
         let count=0;
         for(const s of shapes){
           try{
@@ -1022,6 +1037,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             }
           }catch(e){console.warn('[PDF Editor] CS図形Fabric化失敗:',s.shape,e);}
         }
+        _suppressModEvents=false;
         if(count)canvas.renderAll();
         console.log('[PDF Editor] コンテンツストリーム図形追加: '+count+'件');
         return count;
@@ -1665,8 +1681,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
   function Sidebar(p){
     const[sq,setSq]=useState('');
     const[dragI,setDragI]=useState(null);
-    if(!p.visible)return null;
-    return html`<div class="sidebar">
+    return html`<div class="sidebar ${p.collapsed?'collapsed':''}"
+      ><button class="sidebar-toggle" onClick=${()=>p.onToggle?.()} title=${p.collapsed?'サイドバーを開く':'サイドバーを閉じる'}>${p.collapsed?'▶':'◀'}</button>
       <div class="sidebar-tabs">
         <button class="sidebar-tab ${p.tab==='thumbs'?'active':''}" onClick=${()=>p.onTab('thumbs')}>ページ</button>
         <button class="sidebar-tab ${p.tab==='outline'?'active':''}" onClick=${()=>p.onTab('outline')}>しおり</button>
@@ -1917,7 +1933,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
   function App(){
     const[hasDoc,setHasDoc]=useState(false),[fName,setFName]=useState(''),[total,setTotal]=useState(0),[curPage,setCurPage]=useState(1),[docId,setDocId]=useState(0);
     const[zoom,setZoom]=useState(1),[dark,setDark]=useState(darkMode);
-    const[sideVis]=useState(true),[sideTab,setSideTab]=useState('thumbs');
+    const[sideVis,setSideVis]=useState(true),[sideTab,setSideTab]=useState('thumbs');
     const[tool,setTool]=useState(TOOLS.SELECT),[sp,setSp]=useState({...DEFAULT_PROPS});
     const[canUndo,setCanUndo]=useState(false),[canRedo,setCanRedo]=useState(false);
     const[thumbs,setThumbs]=useState([]),[outline,setOutline]=useState([]),[searchRes,setSearchRes]=useState([]);
@@ -2053,7 +2069,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           dark=${dark} onDark=${toggleDark} onHelp=${()=>setDlg('help')} />
         ${showProps?html`<${PropsBar} sp=${sp} onP=${onPropsChange} tool=${tool} />`:null}
         <div class="app-body">
-          <${Sidebar} visible=${sideVis} tab=${sideTab} onTab=${setSideTab}
+          <${Sidebar} visible=${sideVis} collapsed=${!sideVis} onToggle=${()=>setSideVis(v=>!v)} tab=${sideTab} onTab=${setSideTab}
             thumbs=${thumbs} curPage=${curPage} onPageSel=${onPage}
             onReorder=${onReorder} onDelete=${onDelPage} onInsert=${onInsert}
             outline=${outline} searchRes=${searchRes} onSearch=${onSearch} onSearchSel=${r=>onPage(r.page)} />
