@@ -1838,6 +1838,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             AL.setTextEditData(embeddedItems,ftItems);
             const rawShapes=PM.getShapeAnnotations(p.curPage-1);
             const shapeCount=AL.addShapeAnnotations(rawShapes,dims,p.zoom);
+            if(shapeCount)HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
             const total=embeddedItems.length+ftItems.length+shapeCount;
             if(total)p.onToast?.('テキスト編集モード: テキスト箇所をクリックして編集 ('+total+'件検出)','info');
           }catch(e){console.error('[PDF Editor] テキスト抽出エラー:',e);}
@@ -1850,6 +1851,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             const csShapes=await RL.getContentStreamShapes(p.curPage);
             if(editLoadIdRef.current!==loadId)return;
             const csCount=AL.addContentStreamShapes(csShapes,dims,p.zoom);
+            // csShape追加後のベースラインをキャプチャ（Undoで空に戻らないように）
+            if(csCount)HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
             if(csCount)p.onToast?.('図形編集モード: 図形を選択して編集 ('+csCount+'件検出)','info');
             else p.onToast?.('図形編集モード: 編集可能な図形が見つかりません','info');
           }catch(e){console.error('[PDF Editor] CS図形検出エラー:',e);}
