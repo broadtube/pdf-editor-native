@@ -378,8 +378,23 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         const raw=tc.items.filter(it=>it.str.trim()).map(it=>{
           const tx=it.transform;
           const fontSize=Math.sqrt(tx[0]*tx[0]+tx[1]*tx[1]);
-          const x=tx[4]*scale;
-          const y=vp.height-(tx[5]*scale)-(fontSize*scale);
+          // PDF変換行列 [a,b,c,d,e,f] でa<0やd<0は反転テキスト
+          // e,fは位置。負スケールの場合、テキスト描画起点がベースライン右端になる
+          const absA=Math.abs(tx[0]),absD=Math.abs(tx[3]);
+          let x,y;
+          // PDF変換行列→キャンバス座標（PDF.jsのviewport変換を模倣）
+          // viewport.transform を使ってPDF座標→キャンバス座標に変換
+          const vt=vp.transform; // [scaleX, 0, 0, -scaleY, 0, height*scale]
+          if(vt){
+            // PDF座標(tx[4],tx[5])をビューポート座標に変換
+            x=vt[0]*tx[4]+vt[2]*tx[5]+vt[4];
+            y=vt[1]*tx[4]+vt[3]*tx[5]+vt[5];
+            // テキストは上から描画されるので、高さ分調整
+            if(tx[3]<0)y-=fontSize*scale; // 反転テキスト
+          } else {
+            x=tx[4]*scale;
+            y=vp.height-(tx[5]*scale)-(fontSize*scale);
+          }
           return{text:it.str,x,y,width:it.width*scale,height:(it.height||fontSize)*scale,fontSize:fontSize*scale,
             _pdfOriginal:{transform:tx,width:it.width,height:it.height||fontSize,str:it.str}};
         });
