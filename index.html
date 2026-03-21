@@ -1242,7 +1242,9 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                 else if(orig.shape==='line'){bx=Math.min(orig.x1,orig.x2);by=Math.min(orig.y1,orig.y2);bw=Math.max(Math.abs(orig.x2-orig.x1),1);bh=Math.max(Math.abs(orig.y2-orig.y1),1);}
                 else if(orig.shape==='path'&&orig.bbox){bx=orig.bbox.x;by=orig.bbox.y;bw=orig.bbox.w;bh=orig.bbox.h;}
                 if(bw>0||bh>0){
-                  page.drawRectangle({x:bx-margin,y:csPH-(by+bh)-margin,width:bw+margin*2,height:bh+margin*2,color:lib().rgb(1,1,1),borderWidth:0});
+                  const PDFLib2=lib();
+                  const cx=bx-margin, cy=csPH-(by+bh)-margin, cw=bw+margin*2, ch=bh+margin*2;
+                  page.pushOperators(PDFLib2.pushGraphicsState(),PDFLib2.setFillingColor(PDFLib2.rgb(1,1,1)),PDFLib2.moveTo(cx,cy),PDFLib2.lineTo(cx+cw,cy),PDFLib2.lineTo(cx+cw,cy+ch),PDFLib2.lineTo(cx,cy+ch),PDFLib2.closePath(),PDFLib2.fill(),PDFLib2.popGraphicsState());
                 }
               }
               // 削除されたcsShapeは白カバーのみ（再描画不要）
@@ -1780,6 +1782,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     const shapeEditCacheRef=useRef(null);
     const editLoadIdRef=useRef(0); // 非同期レース防止用
     const autoSaveLockRef=useRef(false); // 自動保存の重複防止ロック
+    const savedCsStateRef=useRef(null); // auto-save後のcsShape状態（再検出の代わりに復元用）
     useEffect(()=>{
       const loadId=++editLoadIdRef.current;
       (async()=>{
@@ -1805,6 +1808,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
               const bytes=await PM.save();
               if(!bytes){throw new Error('PM.save() returned null');}
               await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);
+              // csShape状態を保存（再入時にプロキシ再検出の代わりに復元）
+              savedCsStateRef.current={page:p.curPage,zoom:p.zoom,shapes:AL.getCsShapeObjects().map(o=>({fabricJSON:o.toObject(['customType','_csOriginal','_isModified']),_csOriginal:o._csOriginal}))};
               // csShape/csCoverのみ除去（通常注釈はpageData/canvasに残す）
               AL.clearCsShapes();
               // pageDataの古いcsShapeもクリーンアップ（ゴースト図形防止）
@@ -1814,7 +1819,6 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
               console.log('[PDF Editor] CS図形編集を自動保存しました');
             }catch(e){
               console.error('[PDF Editor] CS図形自動保存エラー:',e);
-              // 失敗時: 図形をクリアしない（ユーザーの編集を保持）
             }
             autoSaveLockRef.current=false;
           } else {
@@ -1860,15 +1864,46 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           shapeEditCacheRef.current=cacheKey;
           try{
             const dims=await RL.getPageDims(p.curPage);
-            const csShapes=await RL.getContentStreamShapes(p.curPage);
-            if(editLoadIdRef.current!==loadId)return;
-            const csCount=AL.addContentStreamShapes(csShapes,dims,p.zoom);
-            // 初期csOriginal一覧を記録（Undo/Redo後の削除追跡再構築用）
-            if(csCount)AL.setInitialCsOriginals(csShapes);
-            // csShape追加後のベースラインをキャプチャ（Undoで空に戻らないように）
-            if(csCount)HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
-            if(csCount)p.onToast?.('図形編集モード: 図形を選択して編集 ('+csCount+'件検出)','info');
-            else p.onToast?.('図形編集モード: 編集可能な図形が見つかりません','info');
+            // auto-save後の保存状態があれば、プロキシ再検出の代わりに復元
+            const saved=savedCsStateRef.current;
+            if(saved&&saved.page===p.curPage){
+              savedCsStateRef.current=null;
+              const zoom=p.zoom;
+              const zoomRatio=saved.zoom?zoom/saved.zoom:1;
+              AL.suppressModEvents(true);
+              for(const s of saved.shapes){
+                try{
+                  const fj=s.fabricJSON;
+                  const t=(fj.type||'').toLowerCase();
+                  let obj=null;
+                  if(t==='rect')obj=new fabric.Rect(fj);
+                  else if(t==='line')obj=new fabric.Line([fj.x1||0,fj.y1||0,fj.x2||0,fj.y2||0],fj);
+                  else if(t==='path'&&fj.path){const d=fj.path.map(seg=>{if(seg[0]==='M')return'M '+seg[1]+' '+seg[2];if(seg[0]==='L')return'L '+seg[1]+' '+seg[2];if(seg[0]==='C')return'C '+seg[1]+' '+seg[2]+' '+seg[3]+' '+seg[4]+' '+seg[5]+' '+seg[6];if(seg[0]==='Q')return'Q '+seg[1]+' '+seg[2]+' '+seg[3]+' '+seg[4];if(seg[0]==='Z')return'Z';return'';}).join(' ');obj=new fabric.Path(d,fj);}
+                  if(obj){
+                    if(zoomRatio!==1){obj.set({left:(obj.left||0)*zoomRatio,top:(obj.top||0)*zoomRatio,scaleX:(obj.scaleX||1)*zoomRatio,scaleY:(obj.scaleY||1)*zoomRatio});}
+                    obj.customType='csShape';obj._csOriginal=s._csOriginal;obj._isModified=false;
+                    const bb=obj.getBoundingRect?.(true)||{left:obj.left,top:obj.top,width:obj.width||0,height:obj.height||0};
+                    const margin=((fj.strokeWidth||2))+2;
+                    const cover=new fabric.Rect({left:bb.left-margin,top:bb.top-margin,width:bb.width+margin*2,height:bb.height+margin*2,fill:'white',stroke:null,strokeWidth:0,selectable:false,evented:false,excludeFromExport:true,customType:'csCover'});
+                    AL.getCanvas().add(cover);AL.getCanvas().add(obj);
+                  }
+                }catch(e){console.warn('[PDF Editor] csShape復元失敗:',e);}
+              }
+              AL.suppressModEvents(false);
+              AL.getCanvas().renderAll();
+              AL.setInitialCsOriginals(saved.shapes.map(s=>s._csOriginal));
+              HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
+              console.log('[PDF Editor] csShape状態を復元: '+saved.shapes.length+'件');
+            } else {
+              savedCsStateRef.current=null;
+              const csShapes=await RL.getContentStreamShapes(p.curPage);
+              if(editLoadIdRef.current!==loadId)return;
+              const csCount=AL.addContentStreamShapes(csShapes,dims,p.zoom);
+              if(csCount)AL.setInitialCsOriginals(csShapes);
+              if(csCount)HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
+              if(csCount)p.onToast?.('図形編集モード: 図形を選択して編集 ('+csCount+'件検出)','info');
+              else p.onToast?.('図形編集モード: 編集可能な図形が見つかりません','info');
+            }
           }catch(e){console.error('[PDF Editor] CS図形検出エラー:',e);}
         }
       })();
