@@ -48,7 +48,7 @@
 body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg-secondary); color:var(--text-primary); overflow:hidden; height:100vh; }
 #app { height:100vh; }
 .app-container { display:flex; flex-direction:column; height:100vh; }
-.app-body { display:flex; flex:1; overflow:hidden; }
+.app-body { display:flex; flex:1; overflow:hidden; position:relative; }
 
 /* Toolbar */
 .toolbar { display:flex; align-items:center; padding:4px 8px; background:var(--bg-primary); border-bottom:1px solid var(--border-color); gap:2px; flex-wrap:wrap; min-height:44px; box-shadow:var(--shadow); z-index:10; }
@@ -86,8 +86,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif
 .sidebar { width:220px; min-width:220px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; overflow:hidden; position:relative; transition:width .2s,min-width .2s; }
 .sidebar.collapsed { width:0; min-width:0; border-right:none; overflow:hidden; }
 .sidebar.collapsed .sidebar-tabs,.sidebar.collapsed .sidebar-content { display:none; }
-.sidebar-toggle { position:absolute; right:-20px; top:50%; transform:translateY(-50%); width:20px; height:48px; background:var(--bg-secondary); border:1px solid var(--border-color); border-left:none; border-radius:0 6px 6px 0; cursor:pointer; display:flex; align-items:center; justify-content:center; z-index:5; font-size:12px; color:var(--text-secondary); padding:0; }
-.sidebar.collapsed .sidebar-toggle { right:-20px; }
+.sidebar-toggle { position:absolute; top:50%; transform:translateY(-50%); width:20px; height:48px; background:var(--bg-secondary); border:1px solid var(--border-color); border-left:none; border-radius:0 6px 6px 0; cursor:pointer; display:flex; align-items:center; justify-content:center; z-index:15; font-size:12px; color:var(--text-secondary); padding:0; transition:left .2s; }
 .sidebar-tabs { display:flex; border-bottom:1px solid var(--border-color); }
 .sidebar-tab { flex:1; padding:8px 4px; border:none; background:transparent; cursor:pointer; font-size:12px; color:var(--text-secondary); border-bottom:2px solid transparent; transition:all .15s; }
 .sidebar-tab:hover { background:var(--bg-secondary); }
@@ -1681,8 +1680,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
   function Sidebar(p){
     const[sq,setSq]=useState('');
     const[dragI,setDragI]=useState(null);
-    return html`<div class="sidebar ${p.collapsed?'collapsed':''}"
-      ><button class="sidebar-toggle" onClick=${()=>p.onToggle?.()} title=${p.collapsed?'サイドバーを開く':'サイドバーを閉じる'}>${p.collapsed?'▶':'◀'}</button>
+    return html`<div class="sidebar ${p.collapsed?'collapsed':''}">
       <div class="sidebar-tabs">
         <button class="sidebar-tab ${p.tab==='thumbs'?'active':''}" onClick=${()=>p.onTab('thumbs')}>ページ</button>
         <button class="sidebar-tab ${p.tab==='outline'?'active':''}" onClick=${()=>p.onTab('outline')}>しおり</button>
@@ -2069,7 +2067,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           dark=${dark} onDark=${toggleDark} onHelp=${()=>setDlg('help')} />
         ${showProps?html`<${PropsBar} sp=${sp} onP=${onPropsChange} tool=${tool} />`:null}
         <div class="app-body">
-          <${Sidebar} visible=${sideVis} collapsed=${!sideVis} onToggle=${()=>setSideVis(v=>!v)} tab=${sideTab} onTab=${setSideTab}
+          <button class="sidebar-toggle" style="left:${sideVis?'220px':'0'}" onClick=${()=>setSideVis(v=>!v)} title=${sideVis?'サイドバーを閉じる':'サイドバーを開く'}>${sideVis?'◀':'▶'}</button>
+          <${Sidebar} visible=${true} collapsed=${!sideVis} tab=${sideTab} onTab=${setSideTab}
             thumbs=${thumbs} curPage=${curPage} onPageSel=${onPage}
             onReorder=${onReorder} onDelete=${onDelPage} onInsert=${onInsert}
             outline=${outline} searchRes=${searchRes} onSearch=${onSearch} onSearchSel=${r=>onPage(r.page)} />
