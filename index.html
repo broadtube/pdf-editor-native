@@ -672,21 +672,21 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         case TOOLS.ARROW: {
           const ang=Math.atan2(ptr.y-drawStart.y,ptr.x-drawStart.x);
           const ln=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so);
-          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
           tempShape=new fabric.Group([ln,hd],{selectable:false,evented:false}); break;
         }
         case TOOLS.DOUBLE_ARROW: {
           const ang=Math.atan2(ptr.y-drawStart.y,ptr.x-drawStart.x);
           const ln=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so);
-          const hd1=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
-          const hd2=new fabric.Triangle({left:drawStart.x,top:drawStart.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)-90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          const hd1=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
+          const hd2=new fabric.Triangle({left:drawStart.x,top:drawStart.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)-90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
           tempShape=new fabric.Group([ln,hd1,hd2],{selectable:false,evented:false}); break;
         }
         case TOOLS.CURVED_ARROW: {
           const cv=makeCurvedArrowPath(drawStart.x,drawStart.y,ptr.x,ptr.y);
           const p=new fabric.Path(cv.path,{...so,fill:'transparent'});
           const ang=Math.atan2(ptr.y-cv.cpy,ptr.x-cv.cpx);
-          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,selectable:false,evented:false});
+          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
           tempShape=new fabric.Group([p,hd],{selectable:false,evented:false}); break;
         }
         case TOOLS.POLYGON: {
@@ -1388,6 +1388,18 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                 }}break;}
               case'polyline':{if(obj.points&&obj.points.length>=2){const col=obj.stroke&&obj.stroke!=='transparent'?lib().rgb(...hexToRgb(obj.stroke)):lib().rgb(0,0,0);const ox=S(obj.left||0),oy=obj.top||0;const sx=obj.scaleX||1,sy=obj.scaleY||1;for(let pi=1;pi<obj.points.length;pi++){const prev=obj.points[pi-1],cur=obj.points[pi];page.drawLine({start:{x:ox+S(prev.x*sx),y:flipY(oy+prev.y*sy)},end:{x:ox+S(cur.x*sx),y:flipY(oy+cur.y*sy)},color:col,thickness:S(obj.strokeWidth||1),opacity:obj.opacity??1});}}break;}
               case'group':{const groupChildren=obj.objects?[...obj.objects]:[];for(const ch of groupChildren){const adj={...ch,left:(ch.left||0)*(obj.scaleX||1)+(obj.left||0),top:(ch.top||0)*(obj.scaleY||1)+(obj.top||0),scaleX:(ch.scaleX||1)*(obj.scaleX||1),scaleY:(ch.scaleY||1)*(obj.scaleY||1),strokeWidth:ch.strokeWidth||obj.strokeWidth||1,stroke:ch.stroke||obj.stroke,fill:ch.fill||obj.fill,opacity:ch.opacity??obj.opacity??1};annotJSON.objects.push(adj);}break;}
+              case'image':{
+                try{
+                  const src=obj.src;if(!src)break;
+                  const imgBytes=await fetch(src).then(r=>r.arrayBuffer());
+                  let pdfImg;
+                  if(src.includes('png')||src.includes('PNG'))pdfImg=await pdfDoc.embedPng(imgBytes);
+                  else pdfImg=await pdfDoc.embedJpg(imgBytes);
+                  const iw=S((obj.width||0)*(obj.scaleX||1)),ih=S((obj.height||0)*(obj.scaleY||1));
+                  page.drawImage(pdfImg,{x:S(obj.left),y:flipY(obj.top,obj.height*(obj.scaleY||1)),width:iw,height:ih,opacity:obj.opacity??1});
+                }catch(imgErr){console.warn('[PDF Editor] 画像埋込失敗:',imgErr);}
+                break;
+              }
               default:console.warn('[PDF Editor] Unknown annotation type: "'+obj.type+'" — skipped');break;
             }
           }catch(e){console.error('[PDF Editor] 注釈埋込失敗 type='+obj.type+' customType='+ct+':',e);}
@@ -2067,7 +2079,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
           dark=${dark} onDark=${toggleDark} onHelp=${()=>setDlg('help')} />
         ${showProps?html`<${PropsBar} sp=${sp} onP=${onPropsChange} tool=${tool} />`:null}
         <div class="app-body">
-          <button class="sidebar-toggle" style="left:${sideVis?'220px':'0'}" onClick=${()=>setSideVis(v=>!v)} title=${sideVis?'サイドバーを閉じる':'サイドバーを開く'}>${sideVis?'◀':'▶'}</button>
+          <button class="sidebar-toggle" style="left:${sideVis?(window.innerWidth<=768?'160px':'220px'):'0'}" onClick=${()=>setSideVis(v=>!v)} title=${sideVis?'サイドバーを閉じる':'サイドバーを開く'}>${sideVis?'◀':'▶'}</button>
           <${Sidebar} visible=${true} collapsed=${!sideVis} tab=${sideTab} onTab=${setSideTab}
             thumbs=${thumbs} curPage=${curPage} onPageSel=${onPage}
             onReorder=${onReorder} onDelete=${onDelPage} onInsert=${onInsert}
