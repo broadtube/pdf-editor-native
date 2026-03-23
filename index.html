@@ -1150,7 +1150,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       insertBlankPage(idx,sz){if(pdfDoc)pdfDoc.insertPage(idx,[sz?.width||595,sz?.height||842]);},
       async merge(docs){
         const m=await lib().PDFDocument.create();
-        for(const d of docs){const s=await lib().PDFDocument.load(new Uint8Array(d));const ps=await m.copyPages(s,s.getPageIndices());ps.forEach(p=>m.addPage(p));}
+        for(const d of docs){const s=await lib().PDFDocument.load(new Uint8Array(d),{ignoreEncryption:true});const ps=await m.copyPages(s,s.getPageIndices());ps.forEach(p=>m.addPage(p));}
         return await m.save();
       },
       async split(ranges){
