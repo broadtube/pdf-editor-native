@@ -647,6 +647,11 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         opt.e.preventDefault();
         return;
       }
+      // SHAPE_EDITモード：クリック箇所のcsShapeをオンデマンドでFabricオブジェクト化
+      if(tool===TOOLS.SHAPE_EDIT&&!opt.target){
+        const self=canvas.__alRef;
+        if(self?.promoteCsShapeAt(ptr.x,ptr.y))return;
+      }
       // TEXT_EDITモード：クリック箇所のテキストのみをFabricオブジェクト化
       if(tool===TOOLS.TEXT_EDIT&&!opt.target){
         const self=canvas.__alRef; // ALへの参照（init時にセット）
@@ -1001,72 +1006,112 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         console.log('[PDF Editor] 図形注釈追加: '+count+'件');
         return count;
       },
-      // コンテンツストリーム図形をFabricオブジェクトとしてキャンバスに追加
-      // 座標はRL.getContentStreamShapes()から画面座標(scale=1)で受け取る
+      // csShape用ヘルパー: 検出データからFabricオブジェクト生成
+      _createCsObj(s,zoom){
+        const bw=s.lineWidth*zoom;
+        const strokeC=s.strokeColor||'transparent';
+        const fillC=s.fillColor||'transparent';
+        let obj=null;
+        if(s.shape==='rect'){
+          obj=new fabric.Rect({left:s.x*zoom,top:s.y*zoom,width:s.w*zoom,height:s.h*zoom,stroke:strokeC,strokeWidth:bw,fill:fillC,opacity:s.opacity});
+        } else if(s.shape==='line'){
+          obj=new fabric.Line([s.x1*zoom,s.y1*zoom,s.x2*zoom,s.y2*zoom],{stroke:strokeC,strokeWidth:bw,opacity:s.opacity});
+        } else if(s.shape==='path'){
+          const parts=[];
+          for(const p of s.path){
+            const tx=p.x!==undefined?p.x*zoom:0,ty=p.y!==undefined?p.y*zoom:0;
+            if(p.op==='M')parts.push(`M ${tx} ${ty}`);
+            else if(p.op==='L')parts.push(`L ${tx} ${ty}`);
+            else if(p.op==='C')parts.push(`C ${p.x1*zoom} ${p.y1*zoom} ${p.x2*zoom} ${p.y2*zoom} ${tx} ${ty}`);
+            else if(p.op==='Q')parts.push(`Q ${p.x1*zoom} ${p.y1*zoom} ${tx} ${ty}`);
+            else if(p.op==='Z')parts.push('Z');
+          }
+          const d=parts.join(' ');
+          if(d)obj=new fabric.Path(d,{stroke:strokeC,strokeWidth:bw,fill:fillC,opacity:s.opacity});
+        }
+        if(obj){obj.customType='csShape';obj._csOriginal=s;obj._isModified=false;obj.objectCaching=true;}
+        return obj;
+      },
+      // コンテンツストリーム図形をオンデマンド方式で管理
+      // 全図形を背景画像として描画し、クリック時のみFabricオブジェクト化（大量図形でも軽量）
       addContentStreamShapes(shapes,dims,zoom){
         if(!canvas||!shapes||!shapes.length)return 0;
         _suppressModEvents=true;
-        let count=0;
-        const coverRects=[]; // 白矩形カバーをまとめて収集
+        // 全図形データを保持（Fabricオブジェクトは作らない）
+        canvas._csShapeData=shapes;
+        canvas._csZoom=zoom;
+        // 背景画像を構築: 白カバー + 全図形描画
+        const offC=document.createElement('canvas');
+        offC.width=canvas.width;offC.height=canvas.height;
+        const ctx=offC.getContext('2d');
         for(const s of shapes){
-          try{
-            let obj=null;
-            const bw=s.lineWidth*zoom;
-            const strokeC=s.strokeColor||'transparent';
-            const fillC=s.fillColor||'transparent';
-            if(s.shape==='rect'){
-              obj=new fabric.Rect({left:s.x*zoom,top:s.y*zoom,width:s.w*zoom,height:s.h*zoom,stroke:strokeC,strokeWidth:bw,fill:fillC,opacity:s.opacity});
-            } else if(s.shape==='line'){
-              obj=new fabric.Line([s.x1*zoom,s.y1*zoom,s.x2*zoom,s.y2*zoom],{stroke:strokeC,strokeWidth:bw,opacity:s.opacity});
-            } else if(s.shape==='path'){
-              let d='';
-              for(const p of s.path){
-                const tx=p.x!==undefined?p.x*zoom:0;
-                const ty=p.y!==undefined?p.y*zoom:0;
-                switch(p.op){
-                  case'M':d+=`M ${tx} ${ty} `;break;
-                  case'L':d+=`L ${tx} ${ty} `;break;
-                  case'C':{
-                    const cx1=p.x1*zoom,cy1=p.y1*zoom;
-                    const cx2=p.x2*zoom,cy2=p.y2*zoom;
-                    d+=`C ${cx1} ${cy1} ${cx2} ${cy2} ${tx} ${ty} `;break;
-                  }
-                  case'Q':{
-                    const qx1=p.x1*zoom,qy1=p.y1*zoom;
-                    d+=`Q ${qx1} ${qy1} ${tx} ${ty} `;break;
-                  }
-                  case'Z':d+='Z ';break;
-                }
-              }
-              if(d.trim()){
-                obj=new fabric.Path(d.trim(),{stroke:strokeC,strokeWidth:bw,fill:fillC,opacity:s.opacity});
-              }
+          // 白カバー
+          let bx,by,bw2,bh2;
+          const bw=s.lineWidth*zoom;const margin=(bw||2)+2;
+          if(s.shape==='rect'){bx=s.x*zoom;by=s.y*zoom;bw2=s.w*zoom;bh2=s.h*zoom;}
+          else if(s.shape==='line'){bx=Math.min(s.x1,s.x2)*zoom;by=Math.min(s.y1,s.y2)*zoom;bw2=Math.max(Math.abs(s.x2-s.x1),1)*zoom;bh2=Math.max(Math.abs(s.y2-s.y1),1)*zoom;}
+          else if(s.shape==='path'&&s.bbox){bx=s.bbox.x*zoom;by=s.bbox.y*zoom;bw2=s.bbox.w*zoom;bh2=s.bbox.h*zoom;}
+          if(bw2>0||bh2>0){ctx.fillStyle='white';ctx.fillRect(bx-margin,by-margin,bw2+margin*2,bh2+margin*2);}
+          // 図形描画
+          ctx.save();
+          ctx.globalAlpha=s.opacity??1;
+          ctx.lineWidth=bw;
+          ctx.strokeStyle=s.strokeColor||'transparent';
+          ctx.fillStyle=s.fillColor||'transparent';
+          ctx.beginPath();
+          if(s.shape==='rect'){ctx.rect(s.x*zoom,s.y*zoom,s.w*zoom,s.h*zoom);}
+          else if(s.shape==='line'){ctx.moveTo(s.x1*zoom,s.y1*zoom);ctx.lineTo(s.x2*zoom,s.y2*zoom);}
+          else if(s.shape==='path'&&s.path){
+            for(const p of s.path){
+              const tx=p.x!==undefined?p.x*zoom:0,ty=p.y!==undefined?p.y*zoom:0;
+              if(p.op==='M')ctx.moveTo(tx,ty);
+              else if(p.op==='L')ctx.lineTo(tx,ty);
+              else if(p.op==='C')ctx.bezierCurveTo(p.x1*zoom,p.y1*zoom,p.x2*zoom,p.y2*zoom,tx,ty);
+              else if(p.op==='Q')ctx.quadraticCurveTo(p.x1*zoom,p.y1*zoom,tx,ty);
+              else if(p.op==='Z')ctx.closePath();
             }
-            if(obj){
-              obj.customType='csShape';
-              obj._csOriginal=s;
-              obj._isModified=false;
-              obj.objectCaching=true; // キャッシュ有効化でrenderAll高速化
-              const bb=obj.getBoundingRect?.(true)||{left:obj.left,top:obj.top,width:obj.width||0,height:obj.height||0};
-              const margin=(bw||2)+2;
-              coverRects.push({x:bb.left-margin,y:bb.top-margin,w:bb.width+margin*2,h:bb.height+margin*2});
-              canvas.add(obj);count++;
-            }
-          }catch(e){console.warn('[PDF Editor] CS図形Fabric化失敗:',s.shape,e);}
+          }
+          if(s.fillColor&&s.fillColor!=='transparent')ctx.fill();
+          if(s.strokeColor&&s.strokeColor!=='transparent')ctx.stroke();
+          ctx.restore();
         }
-        // 白矩形カバーをオフスクリーンキャンバスにまとめて描画→背景画像として設定
-        if(coverRects.length){
-          const offC=document.createElement('canvas');
-          offC.width=canvas.width;offC.height=canvas.height;
-          const ctx=offC.getContext('2d');
-          ctx.fillStyle='white';
-          for(const r of coverRects)ctx.fillRect(r.x,r.y,r.w,r.h);
-          canvas._csCoverImage=offC;
-        }
+        canvas._csCoverImage=offC;
         _suppressModEvents=false;
-        if(count)canvas.renderAll();
-        console.log('[PDF Editor] コンテンツストリーム図形追加: '+count+'件 (カバー: 背景画像化)');
-        return count;
+        canvas.renderAll();
+        console.log('[PDF Editor] コンテンツストリーム図形追加: '+shapes.length+'件 (オンデマンド方式)');
+        return shapes.length;
+      },
+      // クリック座標からcsShapeデータを検索してFabricオブジェクト化
+      promoteCsShapeAt(px,py){
+        if(!canvas||!canvas._csShapeData)return null;
+        const zoom=canvas._csZoom||1;
+        let best=null,bestDist=Infinity;
+        for(const s of canvas._csShapeData){
+          let rx,ry,rw,rh;
+          if(s.shape==='rect'){rx=s.x*zoom;ry=s.y*zoom;rw=s.w*zoom;rh=s.h*zoom;}
+          else if(s.shape==='line'){rx=Math.min(s.x1,s.x2)*zoom;ry=Math.min(s.y1,s.y2)*zoom;rw=Math.max(Math.abs(s.x2-s.x1),1)*zoom;rh=Math.max(Math.abs(s.y2-s.y1),1)*zoom;}
+          else if(s.shape==='path'&&s.bbox){rx=s.bbox.x*zoom;ry=s.bbox.y*zoom;rw=s.bbox.w*zoom;rh=s.bbox.h*zoom;}
+          else continue;
+          const m=10;
+          if(px>=rx-m&&px<=rx+rw+m&&py>=ry-m&&py<=ry+rh+m){
+            const cx=rx+rw/2,cy=ry+rh/2;
+            const dist=(px-cx)*(px-cx)+(py-cy)*(py-cy);
+            if(dist<bestDist){bestDist=dist;best=s;}
+          }
+        }
+        if(!best)return null;
+        // 既にFabricオブジェクトとして存在するか
+        const existing=canvas.getObjects().find(o=>o.customType==='csShape'&&o._csOriginal===best);
+        if(existing)return existing;
+        // Fabricオブジェクト化
+        const obj=this._createCsObj(best,zoom);
+        if(!obj)return null;
+        _suppressModEvents=true;
+        canvas.add(obj);
+        _suppressModEvents=false;
+        canvas.setActiveObject(obj);
+        canvas.renderAll();
+        return obj;
       },
       clearUnmodifiedPdfText(){
         if(!canvas)return;
@@ -1088,7 +1133,9 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         _suppressModEvents=true;
         const toRemove=canvas.getObjects().filter(o=>o.customType==='csShape'||o.customType==='csCover');
         toRemove.forEach(o=>canvas.remove(o));
-        canvas._csCoverImage=null; // 白カバー背景画像もクリア
+        canvas._csCoverImage=null;
+        canvas._csShapeData=null;
+        canvas._csZoom=null;
         if(toRemove.length)canvas.renderAll();
         _suppressModEvents=false;
       },
@@ -1102,6 +1149,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         return canvas.getObjects().filter(o=>o.customType==='csShape');
       },
       getDeletedCsOriginals(){return _deletedCsShapes.splice(0);},
+      peekDeletedCsOriginals(){return[..._deletedCsShapes];},
       async addImage(dataUrl){ if(!canvas)return;const img=await fabric.Image.fromURL(dataUrl);const mx=400;if(img.width>mx||img.height>mx){const s=mx/Math.max(img.width,img.height);img.scaleToWidth(img.width*s);}canvas.add(img);canvas.setActiveObject(img);canvas.renderAll(); },
       deleteSelected(){ if(!canvas)return; const a=canvas.getActiveObjects(); a.forEach(o=>canvas.remove(o)); canvas.discardActiveObject(); canvas.renderAll(); },
       _lastZoom:1,
@@ -1836,7 +1884,15 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
               if(!bytes){throw new Error('PM.save() returned null');}
               await RL.loadDocument(bytes.buffer);await PM.load(bytes.buffer);
               // csShape状態を保存（再入時にプロキシ再検出の代わりに復元）
-              savedCsStateRef.current={page:p.curPage,zoom:p.zoom,shapes:AL.getCsShapeObjects().map(o=>({fabricJSON:o.toObject(['customType','_csOriginal','_isModified']),_csOriginal:o._csOriginal}))};
+              // オンデマンド方式: 修正済みFabricオブジェクト + 未修正の_csShapeDataを統合
+              const modifiedObjs=AL.getCsShapeObjects().filter(o=>o._isModified);
+              const modifiedOriginals=new Set(modifiedObjs.map(o=>o._csOriginal));
+              const deletedOriginals=new Set(AL.peekDeletedCsOriginals());
+              const unmodifiedData=(AL.getCanvas()?._csShapeData||[]).filter(s=>!modifiedOriginals.has(s)&&!deletedOriginals.has(s));
+              savedCsStateRef.current={page:p.curPage,zoom:AL._lastZoom,
+                rawShapes:unmodifiedData,
+                modifiedShapes:modifiedObjs.map(o=>({fabricJSON:o.toObject(['customType','_csOriginal','_isModified']),_csOriginal:o._csOriginal}))
+              };
               // csShape/csCoverのみ除去（通常注釈はpageData/canvasに残す）
               AL.clearCsShapes();
               // pageDataの古いcsShapeもクリーンアップ（ゴースト図形防止）
@@ -1895,40 +1951,31 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             const saved=savedCsStateRef.current;
             if(saved&&saved.page===p.curPage){
               savedCsStateRef.current=null;
-              const zoom=p.zoom;
-              const zoomRatio=saved.zoom?zoom/saved.zoom:1;
-              AL.suppressModEvents(true);
-              const restoreCoverRects=[];
-              for(const s of saved.shapes){
-                try{
-                  const fj=s.fabricJSON;
-                  const t=(fj.type||'').toLowerCase();
-                  let obj=null;
-                  if(t==='rect')obj=new fabric.Rect(fj);
-                  else if(t==='line')obj=new fabric.Line([fj.x1||0,fj.y1||0,fj.x2||0,fj.y2||0],fj);
-                  else if(t==='path'&&fj.path){const d=fj.path.map(seg=>{if(seg[0]==='M')return'M '+seg[1]+' '+seg[2];if(seg[0]==='L')return'L '+seg[1]+' '+seg[2];if(seg[0]==='C')return'C '+seg[1]+' '+seg[2]+' '+seg[3]+' '+seg[4]+' '+seg[5]+' '+seg[6];if(seg[0]==='Q')return'Q '+seg[1]+' '+seg[2]+' '+seg[3]+' '+seg[4];if(seg[0]==='Z')return'Z';return'';}).join(' ');obj=new fabric.Path(d,fj);}
-                  if(obj){
-                    if(zoomRatio!==1){obj.set({left:(obj.left||0)*zoomRatio,top:(obj.top||0)*zoomRatio,scaleX:(obj.scaleX||1)*zoomRatio,scaleY:(obj.scaleY||1)*zoomRatio});}
-                    obj.customType='csShape';obj._csOriginal=s._csOriginal;obj._isModified=false;
-                    const bb=obj.getBoundingRect?.(true)||{left:obj.left,top:obj.top,width:obj.width||0,height:obj.height||0};
-                    const margin=((fj.strokeWidth||2))+2;
-                    restoreCoverRects.push({x:bb.left-margin,y:bb.top-margin,w:bb.width+margin*2,h:bb.height+margin*2});
-                    AL.getCanvas().add(obj);
-                  }
-                }catch(e){console.warn('[PDF Editor] csShape復元失敗:',e);}
+              // オンデマンド方式で復元: 未修正データ + 修正済みデータを統合
+              const allShapes=[...(saved.rawShapes||[])];
+              // 修正済み図形をFabricオブジェクトとしてプロモートし、_csOriginalを更新
+              const modFabricObjs=[];
+              for(const ms of (saved.modifiedShapes||[])){
+                const obj=AL._createCsObj(ms._csOriginal,p.zoom);
+                if(obj){
+                  // 修正済みの位置・色などをfabricJSONから復元
+                  const fj=ms.fabricJSON;
+                  if(fj.left!==undefined)obj.set({left:fj.left,top:fj.top});
+                  if(fj.stroke)obj.set({stroke:fj.stroke});
+                  if(fj.fill)obj.set({fill:fj.fill});
+                  if(fj.scaleX)obj.set({scaleX:fj.scaleX,scaleY:fj.scaleY});
+                  obj._isModified=true;
+                  AL.suppressModEvents(true);
+                  AL.getCanvas().add(obj);
+                  AL.suppressModEvents(false);
+                  modFabricObjs.push(obj);
+                }
               }
-              if(restoreCoverRects.length){
-                const c2=AL.getCanvas(),offC=document.createElement('canvas');
-                offC.width=c2.width;offC.height=c2.height;
-                const ctx2=offC.getContext('2d');ctx2.fillStyle='white';
-                for(const r of restoreCoverRects)ctx2.fillRect(r.x,r.y,r.w,r.h);
-                c2._csCoverImage=offC;
-              }
-              AL.suppressModEvents(false);
-              AL.getCanvas().renderAll();
-              AL.setInitialCsOriginals(saved.shapes.map(s=>s._csOriginal));
+              // 全図形（未修正）をaddContentStreamShapesのオンデマンド方式で追加
+              const csCount=AL.addContentStreamShapes(allShapes,dims,p.zoom);
+              AL.setInitialCsOriginals([...allShapes,...(saved.modifiedShapes||[]).map(s=>s._csOriginal)]);
               HM.resetForPage({type:'annotation',pageNumber:p.curPage,data:AL.toJSON(),timestamp:Date.now()});
-              console.log('[PDF Editor] csShape状態を復元: '+saved.shapes.length+'件');
+              console.log('[PDF Editor] csShape状態を復元: '+(csCount+modFabricObjs.length)+'件 (修正済み:'+modFabricObjs.length+'件)');
             } else {
               savedCsStateRef.current=null;
               const csShapes=await RL.getContentStreamShapes(p.curPage);
