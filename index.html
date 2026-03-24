@@ -780,7 +780,9 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       init(el,w,h){
         const ce=document.createElement('canvas'); ce.id='annot-canvas'; el.appendChild(ce);
         canvas=new fabric.Canvas(ce,{width:w,height:h,selection:true,preserveObjectStacking:true});
-        canvas.__alRef=this; // TEXT_EDIT用にALへの参照を保持
+        canvas.__alRef=this;
+        // csShape白カバー画像を各フレームの最背面に描画（Fabricオブジェクト化を回避してパフォーマンス向上）
+        canvas.on('before:render',()=>{if(canvas._csCoverImage){const ctx=canvas.getContext();ctx.drawImage(canvas._csCoverImage,0,0);}});
         canvas.on('object:modified',(e)=>{if(_suppressModEvents)return;if(e.target&&(e.target.customType==='shapeAnnot'||e.target.customType==='csShape'))e.target._isModified=true;onMod?.();}); canvas.on('object:added',()=>{if(!_suppressModEvents)onMod?.();}); canvas.on('object:removed',(e)=>{if(!_suppressModEvents){if(e.target?.customType==='csShape'&&e.target._csOriginal){_deletedCsShapes.push(e.target._csOriginal);}onMod?.();}});
         canvas.on('selection:created',e=>onSel?.(e)); canvas.on('selection:updated',e=>onSel?.(e));
         canvas.on('mouse:down',onMouseDown); canvas.on('mouse:move',onMouseMove); canvas.on('mouse:up',onMouseUp);
@@ -1003,8 +1005,9 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       // 座標はRL.getContentStreamShapes()から画面座標(scale=1)で受け取る
       addContentStreamShapes(shapes,dims,zoom){
         if(!canvas||!shapes||!shapes.length)return 0;
-        _suppressModEvents=true; // 大量追加中の履歴記録・イベント抑制（O(N²)防止）
+        _suppressModEvents=true;
         let count=0;
+        const coverRects=[]; // 白矩形カバーをまとめて収集
         for(const s of shapes){
           try{
             let obj=null;
@@ -1043,18 +1046,26 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
               obj.customType='csShape';
               obj._csOriginal=s;
               obj._isModified=false;
-              // 背景のPDF描画を覆い隠す白矩形を追加（元の図形位置）
+              obj.objectCaching=true; // キャッシュ有効化でrenderAll高速化
               const bb=obj.getBoundingRect?.(true)||{left:obj.left,top:obj.top,width:obj.width||0,height:obj.height||0};
               const margin=(bw||2)+2;
-              const cover=new fabric.Rect({left:bb.left-margin,top:bb.top-margin,width:bb.width+margin*2,height:bb.height+margin*2,fill:'white',stroke:null,strokeWidth:0,selectable:false,evented:false,excludeFromExport:true,customType:'csCover'});
-              canvas.add(cover);
+              coverRects.push({x:bb.left-margin,y:bb.top-margin,w:bb.width+margin*2,h:bb.height+margin*2});
               canvas.add(obj);count++;
             }
           }catch(e){console.warn('[PDF Editor] CS図形Fabric化失敗:',s.shape,e);}
         }
+        // 白矩形カバーをオフスクリーンキャンバスにまとめて描画→背景画像として設定
+        if(coverRects.length){
+          const offC=document.createElement('canvas');
+          offC.width=canvas.width;offC.height=canvas.height;
+          const ctx=offC.getContext('2d');
+          ctx.fillStyle='white';
+          for(const r of coverRects)ctx.fillRect(r.x,r.y,r.w,r.h);
+          canvas._csCoverImage=offC;
+        }
         _suppressModEvents=false;
         if(count)canvas.renderAll();
-        console.log('[PDF Editor] コンテンツストリーム図形追加: '+count+'件');
+        console.log('[PDF Editor] コンテンツストリーム図形追加: '+count+'件 (カバー: 背景画像化)');
         return count;
       },
       clearUnmodifiedPdfText(){
@@ -1074,9 +1085,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       },
       clearCsShapes(){
         if(!canvas)return;
-        _suppressModEvents=true; // システムクリーンアップは削除追跡を抑制
+        _suppressModEvents=true;
         const toRemove=canvas.getObjects().filter(o=>o.customType==='csShape'||o.customType==='csCover');
         toRemove.forEach(o=>canvas.remove(o));
+        canvas._csCoverImage=null; // 白カバー背景画像もクリア
         if(toRemove.length)canvas.renderAll();
         _suppressModEvents=false;
       },
@@ -1886,6 +1898,7 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
               const zoom=p.zoom;
               const zoomRatio=saved.zoom?zoom/saved.zoom:1;
               AL.suppressModEvents(true);
+              const restoreCoverRects=[];
               for(const s of saved.shapes){
                 try{
                   const fj=s.fabricJSON;
@@ -1899,10 +1912,17 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
                     obj.customType='csShape';obj._csOriginal=s._csOriginal;obj._isModified=false;
                     const bb=obj.getBoundingRect?.(true)||{left:obj.left,top:obj.top,width:obj.width||0,height:obj.height||0};
                     const margin=((fj.strokeWidth||2))+2;
-                    const cover=new fabric.Rect({left:bb.left-margin,top:bb.top-margin,width:bb.width+margin*2,height:bb.height+margin*2,fill:'white',stroke:null,strokeWidth:0,selectable:false,evented:false,excludeFromExport:true,customType:'csCover'});
-                    AL.getCanvas().add(cover);AL.getCanvas().add(obj);
+                    restoreCoverRects.push({x:bb.left-margin,y:bb.top-margin,w:bb.width+margin*2,h:bb.height+margin*2});
+                    AL.getCanvas().add(obj);
                   }
                 }catch(e){console.warn('[PDF Editor] csShape復元失敗:',e);}
+              }
+              if(restoreCoverRects.length){
+                const c2=AL.getCanvas(),offC=document.createElement('canvas');
+                offC.width=c2.width;offC.height=c2.height;
+                const ctx2=offC.getContext('2d');ctx2.fillStyle='white';
+                for(const r of restoreCoverRects)ctx2.fillRect(r.x,r.y,r.w,r.h);
+                c2._csCoverImage=offC;
               }
               AL.suppressModEvents(false);
               AL.getCanvas().renderAll();
