@@ -855,11 +855,33 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             if(p.strokeDashArray!==undefined)act.set('strokeDashArray',p.strokeDashArray);
             // Group内の子要素にも適用（矢印・双方向矢印・曲線矢印・吹き出し雲等）
             if(act.type==='group'&&act._objects){
+              // 先端スタイル変更: 矢印先端（triangle/polygon/circle/path）を新しいスタイルに置換
+              if(p.arrowHeadStyle!==undefined){
+                const headTypes=['triangle','polygon','circle'];
+                const isHead=o=>headTypes.includes(o.type)||(o.type==='path'&&o.fill==='transparent'&&o.width<50);
+                const headIndices=[];
+                act._objects.forEach((ch,i)=>{if(isHead(ch))headIndices.push(i);});
+                if(headIndices.length>0){
+                  const strokeC=p.strokeColor||act._objects.find(o=>o.type==='line'||o.type==='path')?.stroke||'#f00';
+                  const op=act.opacity??1;
+                  const sw=act._objects.find(o=>o.type==='line'||(!headTypes.includes(o.type)&&o.type==='path'))?.strokeWidth||2;
+                  const hs=Math.max(10,sw*4);
+                  for(let hi=headIndices.length-1;hi>=0;hi--){
+                    const idx=headIndices[hi];
+                    const old=act._objects[idx];
+                    const newHead=makeArrowHead(old.left,old.top,old.angle||0,hs,strokeC,op,p.arrowHeadStyle);
+                    if(newHead){act._objects.splice(idx,1,newHead);}
+                    else{act._objects.splice(idx,1);} // 'none'の場合は除去
+                  }
+                  act.dirty=true;
+                }
+              }
               for(const ch of act._objects){
-                if(p.strokeColor!==undefined){ch.set('stroke',p.strokeColor);if(ch.type==='triangle'||ch.type==='polygon'||ch.type==='circle')ch.set('fill',p.strokeColor);}
-                if(p.fillColor!==undefined&&ch.type!=='triangle'&&ch.type!=='polygon'&&ch.type!=='circle')ch.set('fill',p.fillColor);
+                const isArrowHead=ch.type==='triangle'||ch.type==='polygon'||ch.type==='circle'||(ch.type==='path'&&ch.fill==='transparent'&&ch.width<50);
+                if(p.strokeColor!==undefined){ch.set('stroke',p.strokeColor);if(isArrowHead)ch.set('fill',p.strokeColor);}
+                if(p.fillColor!==undefined&&!isArrowHead)ch.set('fill',p.fillColor);
                 if(p.strokeWidth!==undefined)ch.set('strokeWidth',p.strokeWidth);
-                if(p.strokeDashArray!==undefined&&(ch.type==='line'||ch.type==='path'))ch.set('strokeDashArray',p.strokeDashArray);
+                if(p.strokeDashArray!==undefined&&!isArrowHead)ch.set('strokeDashArray',p.strokeDashArray);
               }
             }
           }
@@ -1793,6 +1815,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
 
   function PropsBar(p){
     const s=p.sp, isTxt=p.tool===TOOLS.TEXT||p.tool===TOOLS.TEXT_EDIT, isSt=p.tool===TOOLS.STAMP;
+    const isLineTool=[TOOLS.LINE,TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW].includes(p.tool)||p.tool===TOOLS.SELECT; // SELECTモードでも線種・先端を表示
+    const isArrowTool=[TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW].includes(p.tool)||p.tool===TOOLS.SELECT;
     return html`<div class="props-bar">
       ${isTxt?html`<label>文字色: <input type="color" value=${s.textColor||'#000000'} onInput=${e=>p.onP({textColor:e.target.value})} /></label>`
         :html`<label>色: <input type="color" value=${s.strokeColor} onInput=${e=>p.onP({strokeColor:e.target.value})} /></label>`}
@@ -1811,12 +1835,12 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         <button class="prop-btn ${s.underline?'active':''}" onClick=${()=>p.onP({underline:!s.underline})}><u>U</u></button>
         <button class="prop-btn ${s.linethrough?'active':''}" onClick=${()=>p.onP({linethrough:!s.linethrough})}><s>S</s></button>
       `:null}
-      ${[TOOLS.LINE,TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW].includes(p.tool)?html`
+      ${isLineTool&&!isTxt&&!isSt?html`
         <label>線種: <select value=${Object.entries(STROKE_DASH_PATTERNS).find(([k,v])=>JSON.stringify(v)===JSON.stringify(s.strokeDashArray))?.[0]||'solid'} onInput=${e=>p.onP({strokeDashArray:STROKE_DASH_PATTERNS[e.target.value]})}>
           <option value="solid">実線</option><option value="dashed">破線</option><option value="dotted">点線</option><option value="dashdot">一点鎖線</option><option value="longdash">長破線</option>
         </select></label>
       `:null}
-      ${[TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW].includes(p.tool)?html`
+      ${isArrowTool&&!isTxt&&!isSt?html`
         <label>先端: <select value=${s.arrowHeadStyle||'filled'} onInput=${e=>p.onP({arrowHeadStyle:e.target.value})}>
           ${Object.entries(ARROW_HEAD_STYLES).map(([k,v])=>html`<option key=${k} value=${k}>${v}</option>`)}
         </select></label>
@@ -2148,7 +2172,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     const curPageRef=useRef(curPage);
     useEffect(()=>{curPageRef.current=curPage;},[curPage]);
     useEffect(()=>{AL.onModified(()=>{const j=AL.toJSON();HM.push({type:'annotation',pageNumber:curPageRef.current,data:j,timestamp:Date.now()});});},[]);
-    useEffect(()=>{AL.onSelection(e=>{const obj=e.selected?.[0];if(!obj)return;const t=(obj.type||'').toLowerCase();if(['textbox','i-text','itext','text'].includes(t)){setSp(prev=>({...prev,fontSize:Math.round(obj.fontSize||16),fontFamily:obj._pdfFontKey||'Noto Sans JP',fontWeight:obj.fontWeight||'normal',fontStyle:obj.fontStyle||'normal',textColor:obj.fill||'#000',underline:!!obj.underline,linethrough:!!obj.linethrough,opacity:obj.opacity??1}));}});},[]);
+    useEffect(()=>{AL.onSelection(e=>{setHasSelection(true);const obj=e.selected?.[0];if(!obj)return;const t=(obj.type||'').toLowerCase();if(['textbox','i-text','itext','text'].includes(t)){setSp(prev=>({...prev,fontSize:Math.round(obj.fontSize||16),fontFamily:obj._pdfFontKey||'Noto Sans JP',fontWeight:obj.fontWeight||'normal',fontStyle:obj.fontStyle||'normal',textColor:obj.fill||'#000',underline:!!obj.underline,linethrough:!!obj.linethrough,opacity:obj.opacity??1}));}});
+      // selection:clearedの監視はcanvas初期化後に遅延セットアップ
+      const setupClear=()=>{const c=AL.getCanvas();if(c){c.on('selection:cleared',()=>setHasSelection(false));}else{setTimeout(setupClear,300);}};setupClear();
+    },[]);
 
     // actionsRefに最新の関数参照を保持（keydownハンドラのstale closure防止）
     useEffect(()=>{actionsRef.current={doUndo,doRedo,doSave};});
@@ -2254,7 +2281,8 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       const onFocus=()=>{setTimeout(()=>{if(!i.files||!i.files.length)setTool(TOOLS.SELECT);},300);window.removeEventListener('focus',onFocus);};
       window.addEventListener('focus',onFocus);i.click();}},[tool]);
 
-    const showProps=tool!==TOOLS.SELECT&&tool!==TOOLS.PAN;
+    const[hasSelection,setHasSelection]=useState(false);
+    const showProps=(tool!==TOOLS.SELECT&&tool!==TOOLS.PAN)||hasSelection;
 
     return html`
       <div class="app-container">
