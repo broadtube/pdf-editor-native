@@ -198,7 +198,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     STAMP:'stamp', NOTE:'note', TEXT_EDIT:'text-edit', SHAPE_EDIT:'shape-edit'
   };
   const STAMP_LABELS = { approved:'承認済', confidential:'機密', draft:'ドラフト', final:'最終版', reviewed:'レビュー済' };
-  const DEFAULT_PROPS = { strokeColor:'#ff0000', textColor:'#000000', fillColor:'transparent', strokeWidth:2, opacity:1, fontSize:16, fontFamily:'Noto Sans JP', fontWeight:'normal', fontStyle:'normal', underline:false, linethrough:false, stampType:'approved', polygonSides:6, starPoints:5, arrowType:'arrow' };
+  const DEFAULT_PROPS = { strokeColor:'#ff0000', textColor:'#000000', fillColor:'transparent', strokeWidth:2, opacity:1, fontSize:16, fontFamily:'Noto Sans JP', fontWeight:'normal', fontStyle:'normal', underline:false, linethrough:false, stampType:'approved', polygonSides:6, starPoints:5, arrowType:'arrow', arrowHeadStyle:'filled', strokeDashArray:null };
+  // 矢印先端スタイル
+  const ARROW_HEAD_STYLES = {filled:'塗りつぶし',open:'開き',diamond:'ひし形',circle:'丸',none:'なし'};
+  const STROKE_DASH_PATTERNS = {solid:null,dashed:[10,5],dotted:[3,3],dashdot:[10,5,3,5],longdash:[20,5]};
   const ZOOM_MIN=0.25, ZOOM_MAX=5, ZOOM_STEP=0.1;
   const SHORTCUTS = { v:'select',r:'rect',c:'circle',l:'line',a:'arrow',p:'pencil',t:'text',h:'highlight',n:'note',s:'stamp',d:'text-edit',e:'shape-edit' };
   const SHORTCUT_LIST = [['V','選択'],['R','矩形'],['C','円'],['L','線'],['A','矢印'],['P','ペン'],['T','テキスト'],['D','テキスト編集'],['E','図形編集'],['H','ハイライト'],['N','付箋'],['S','スタンプ'],['Ctrl+Z','元に戻す'],['Ctrl+Y','やり直し'],['Ctrl+S','保存'],['Delete','削除'],['+/-','ズーム'],['?','ヘルプ']];
@@ -241,7 +244,29 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
     const dx=ex-sx,dy=ey-sy;const mx=(sx+ex)/2,my=(sy+ey)/2;
     const len=Math.sqrt(dx*dx+dy*dy);const nx=-dy/len,ny=dx/len;
     const bulge=len*0.3;const cpx=mx+nx*bulge,cpy=my+ny*bulge;
-    return{path:`M ${sx} ${sy} Q ${cpx} ${cpy} ${ex} ${ey}`,cpx,cpy};
+    // 始点でのベジェ接線方向（始点→制御点）
+    const startAng=Math.atan2(cpy-sy,cpx-sx);
+    return{path:`M ${sx} ${sy} Q ${cpx} ${cpy} ${ex} ${ey}`,cpx,cpy,startAng};
+  }
+  // 矢印先端を生成（スタイル別）
+  function makeArrowHead(x,y,angle,size,strokeColor,opacity,style){
+    const opts={left:x,top:y,originX:'center',originY:'center',angle,opacity:opacity??1,selectable:false,evented:false};
+    if(!style||style==='filled'){
+      return new fabric.Triangle({...opts,width:size,height:size,fill:strokeColor,stroke:strokeColor,strokeWidth:1});
+    } else if(style==='open'){
+      // 開き矢印（V字）
+      const half=size/2;
+      const d=`M ${-half} ${-half} L 0 ${half} L ${half} ${-half}`;
+      return new fabric.Path(d,{...opts,fill:'transparent',stroke:strokeColor,strokeWidth:Math.max(2,size/5)});
+    } else if(style==='diamond'){
+      const half=size/2;
+      const pts=[{x:0,y:-half},{x:half,y:0},{x:0,y:half},{x:-half,y:0}];
+      return new fabric.Polygon(pts,{...opts,fill:strokeColor,stroke:strokeColor,strokeWidth:1});
+    } else if(style==='circle'){
+      return new fabric.Circle({...opts,radius:size/3,fill:strokeColor,stroke:strokeColor,strokeWidth:1});
+    } else { // 'none'
+      return null;
+    }
   }
 
   // --- Utilities ---
@@ -681,8 +706,10 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
       if(tempShape)canvas.remove(tempShape);
       const x=Math.min(drawStart.x,ptr.x),y=Math.min(drawStart.y,ptr.y),w=Math.abs(ptr.x-drawStart.x),h=Math.abs(ptr.y-drawStart.y);
       const sw=props.strokeWidth||2;
-      const so={stroke:props.strokeColor||'#f00',strokeWidth:sw,fill:props.fillColor||'transparent',opacity:props.opacity??1,selectable:false,evented:false};
+      const dashArr=props.strokeDashArray||null;
+      const so={stroke:props.strokeColor||'#f00',strokeWidth:sw,fill:props.fillColor||'transparent',opacity:props.opacity??1,strokeDashArray:dashArr,selectable:false,evented:false};
       const headSize=Math.max(10,sw*4);
+      const headStyle=props.arrowHeadStyle||'filled';
       switch(tool){
         case TOOLS.RECT: tempShape=new fabric.Rect({left:x,top:y,width:w,height:h,...so}); break;
         case TOOLS.CIRCLE: {const r=Math.min(w,h)/2;tempShape=new fabric.Circle({left:drawStart.x-(w>h?r:r*(w/Math.max(h,1))),top:drawStart.y-(h>w?r:r*(h/Math.max(w,1))),radius:r,...so});break;}
@@ -693,22 +720,33 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         case TOOLS.ARROW: {
           const ang=Math.atan2(ptr.y-drawStart.y,ptr.x-drawStart.x);
           const ln=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so);
-          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
-          tempShape=new fabric.Group([ln,hd],{selectable:false,evented:false}); break;
+          const parts=[ln];
+          const hd=makeArrowHead(ptr.x,ptr.y,(ang*180/Math.PI)+90,headSize,so.stroke,so.opacity,headStyle);
+          if(hd)parts.push(hd);
+          tempShape=new fabric.Group(parts,{selectable:false,evented:false}); break;
         }
         case TOOLS.DOUBLE_ARROW: {
           const ang=Math.atan2(ptr.y-drawStart.y,ptr.x-drawStart.x);
           const ln=new fabric.Line([drawStart.x,drawStart.y,ptr.x,ptr.y],so);
-          const hd1=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
-          const hd2=new fabric.Triangle({left:drawStart.x,top:drawStart.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)-90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
-          tempShape=new fabric.Group([ln,hd1,hd2],{selectable:false,evented:false}); break;
+          const parts=[ln];
+          const hd1=makeArrowHead(ptr.x,ptr.y,(ang*180/Math.PI)+90,headSize,so.stroke,so.opacity,headStyle);
+          const hd2=makeArrowHead(drawStart.x,drawStart.y,(ang*180/Math.PI)-90,headSize,so.stroke,so.opacity,headStyle);
+          if(hd1)parts.push(hd1);if(hd2)parts.push(hd2);
+          tempShape=new fabric.Group(parts,{selectable:false,evented:false}); break;
         }
         case TOOLS.CURVED_ARROW: {
           const cv=makeCurvedArrowPath(drawStart.x,drawStart.y,ptr.x,ptr.y);
           const p=new fabric.Path(cv.path,{...so,fill:'transparent'});
           const ang=Math.atan2(ptr.y-cv.cpy,ptr.x-cv.cpx);
-          const hd=new fabric.Triangle({left:ptr.x,top:ptr.y,originX:'center',originY:'center',width:headSize,height:headSize,angle:(ang*180/Math.PI)+90,fill:so.stroke,stroke:so.stroke,strokeWidth:1,opacity:so.opacity,selectable:false,evented:false});
-          tempShape=new fabric.Group([p,hd],{selectable:false,evented:false}); break;
+          const parts=[p];
+          const hd=makeArrowHead(ptr.x,ptr.y,(ang*180/Math.PI)+90,headSize,so.stroke,so.opacity,headStyle);
+          if(hd)parts.push(hd);
+          // 両端矢印オプション（曲線矢印）
+          if(props.curvedArrowDouble){
+            const hd2=makeArrowHead(drawStart.x,drawStart.y,(cv.startAng*180/Math.PI)-90,headSize,so.stroke,so.opacity,headStyle);
+            if(hd2)parts.push(hd2);
+          }
+          tempShape=new fabric.Group(parts,{selectable:false,evented:false}); break;
         }
         case TOOLS.POLYGON: {
           const sides=props.polygonSides||6;const r=Math.min(w,h)/2;
@@ -814,12 +852,14 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
             if(p.strokeColor!==undefined)act.set('stroke',p.strokeColor);
             if(p.fillColor!==undefined)act.set('fill',p.fillColor);
             if(p.strokeWidth!==undefined)act.set('strokeWidth',p.strokeWidth);
+            if(p.strokeDashArray!==undefined)act.set('strokeDashArray',p.strokeDashArray);
             // Group内の子要素にも適用（矢印・双方向矢印・曲線矢印・吹き出し雲等）
             if(act.type==='group'&&act._objects){
               for(const ch of act._objects){
-                if(p.strokeColor!==undefined){ch.set('stroke',p.strokeColor);if(ch.type==='triangle')ch.set('fill',p.strokeColor);}
-                if(p.fillColor!==undefined&&ch.type!=='triangle')ch.set('fill',p.fillColor);
+                if(p.strokeColor!==undefined){ch.set('stroke',p.strokeColor);if(ch.type==='triangle'||ch.type==='polygon'||ch.type==='circle')ch.set('fill',p.strokeColor);}
+                if(p.fillColor!==undefined&&ch.type!=='triangle'&&ch.type!=='polygon'&&ch.type!=='circle')ch.set('fill',p.fillColor);
                 if(p.strokeWidth!==undefined)ch.set('strokeWidth',p.strokeWidth);
+                if(p.strokeDashArray!==undefined&&(ch.type==='line'||ch.type==='path'))ch.set('strokeDashArray',p.strokeDashArray);
               }
             }
           }
@@ -1770,6 +1810,19 @@ console.log('%c[PDF Editor] Cache cleared - script loaded at ' + new Date().toIS
         <button class="prop-btn ${s.fontStyle==='italic'?'active':''}" onClick=${()=>p.onP({fontStyle:s.fontStyle==='italic'?'normal':'italic'})}><i>I</i></button>
         <button class="prop-btn ${s.underline?'active':''}" onClick=${()=>p.onP({underline:!s.underline})}><u>U</u></button>
         <button class="prop-btn ${s.linethrough?'active':''}" onClick=${()=>p.onP({linethrough:!s.linethrough})}><s>S</s></button>
+      `:null}
+      ${[TOOLS.LINE,TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW].includes(p.tool)?html`
+        <label>線種: <select value=${Object.entries(STROKE_DASH_PATTERNS).find(([k,v])=>JSON.stringify(v)===JSON.stringify(s.strokeDashArray))?.[0]||'solid'} onInput=${e=>p.onP({strokeDashArray:STROKE_DASH_PATTERNS[e.target.value]})}>
+          <option value="solid">実線</option><option value="dashed">破線</option><option value="dotted">点線</option><option value="dashdot">一点鎖線</option><option value="longdash">長破線</option>
+        </select></label>
+      `:null}
+      ${[TOOLS.ARROW,TOOLS.DOUBLE_ARROW,TOOLS.CURVED_ARROW].includes(p.tool)?html`
+        <label>先端: <select value=${s.arrowHeadStyle||'filled'} onInput=${e=>p.onP({arrowHeadStyle:e.target.value})}>
+          ${Object.entries(ARROW_HEAD_STYLES).map(([k,v])=>html`<option key=${k} value=${k}>${v}</option>`)}
+        </select></label>
+      `:null}
+      ${p.tool===TOOLS.CURVED_ARROW?html`
+        <label><input type="checkbox" checked=${!!s.curvedArrowDouble} onChange=${e=>p.onP({curvedArrowDouble:e.target.checked})} /> 両端矢印</label>
       `:null}
       ${p.tool===TOOLS.POLYGON?html`<label>辺数: <input type="number" value=${s.polygonSides||6} min="3" max="12" style="width:45px" onInput=${e=>p.onP({polygonSides:parseInt(e.target.value)||6})} /></label>`:null}
       ${p.tool===TOOLS.STAR?html`<label>頂点: <input type="number" value=${s.starPoints||5} min="3" max="12" style="width:45px" onInput=${e=>p.onP({starPoints:parseInt(e.target.value)||5})} /></label>`:null}
